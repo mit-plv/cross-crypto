@@ -3,6 +3,7 @@ Require Import Coq.Classes.Morphisms.
 Require Import Coq.MSets.MSetPositive Coq.FSets.FMapPositive.
 Require Import FCF.FCF FCF.Asymptotic FCF.EqDec.
 Require Import CrossCrypto.Util CrossCrypto.RatUtil CrossCrypto.RewriteUtil CrossCrypto.MapUtil.
+Require Import Lia. (* TODO: remove after removing not_negligible_const *)
 
 Section Language.
   Context {type  : Set} {eqdec_type : EqDec type}
@@ -535,6 +536,50 @@ Section Language.
 
   Context (inspect_vtrue : forall eta, inspect_vbool (vtrue eta) = true).
   Context (inspect_vfalse : forall eta, inspect_vbool (vfalse eta) = false).
+  Context (vmessage_exists : forall eta, interp_type tmessage eta).
+
+  (* TODO: contribute to FCF *)
+  Lemma not_negligible_const c (Hc: ~ c == 0) : ~ negligible (fun _ => c).
+  Proof.
+    destruct c as [num [den Hden]].
+    assert (Hnum : num > 0). {
+      cbv [eqRat beqRat ratCD] in Hc; simpl in Hc.
+      match goal with [ Hc : context [PeanoNat.Nat.eq_dec ?a ?b] |- _ ]
+                      => destruct (PeanoNat.Nat.eq_dec a b) in Hc
+      end; solve [ contradiction | nia ].
+    }
+    intros H; cbv [negligible] in *; specialize (H 1%nat); destruct H as [n0 H].
+    eapply (H (den + n0)%nat ltac:(constructor; omega) ltac:(omega)); clear H.
+    cbv [leRat bleRat ratCD]; simpl.
+    match goal with |- context [le_gt_dec ?a ?b] =>
+                    destruct (le_gt_dec a b)
+    end; solve [ trivial | nia ].
+  Qed.
+
+  Lemma tfdist : ~ expr_const vtrue ≈ expr_const vfalse.
+  Proof.
+    cbv [indist universal_security_game interp].
+    intro H.
+    specialize (H (fun _ => PositiveSet.empty)
+                  (fun _ _ _ => (vmessage_exists _))
+                  (fun t =>
+                     match (EqDec_dec _ tbool t) with
+                     | left e => eq_rect tbool (fun t => forall eta, _ -> interp_type t _ -> _)
+                                         (fun eta rands v => inspect_vbool v) t e
+                     | right _ => fun _ _ _ => false
+                     end)). 
+    cbv [id] in *.
+    destruct (EqDec_dec eqdec_type tbool tbool) as [e|] in *; try contradiction; [].
+    rewrite (UIP_dec (EqDec_dec _) e eq_refl) in H; cbn [eq_rect] in H.
+    setoid_rewrite Bind_unused in H.
+    setoid_rewrite <-Bind_assoc in H.
+    do 2 setoid_rewrite Bind_Ret_l in H.
+    cbn [interp_fixed] in *.
+    setoid_rewrite inspect_vtrue in H; setoid_rewrite inspect_vfalse in H.
+    rewrite ?evalDist_ret_1, ?evalDist_ret_0 in H by congruence.
+    setoid_rewrite ratDistance_comm in H; setoid_rewrite ratDistance_from_0 in H.
+    eapply not_negligible_const; eauto using rat1_ne_rat0.
+  Qed.
 
   Lemma if_true t (e1 e2:expr t) : eqwhp (expr_func ite (expr_pair (expr_const vtrue) (expr_pair e1 e2))) e1.
   Proof.

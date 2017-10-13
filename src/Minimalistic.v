@@ -330,6 +330,38 @@ Section Language.
   Context (interp_feqb : forall t eta (v1 v2:interp_type t eta),
               interp_func feqb (interp_pair v1 v2) = if eqb v1 v2 then vtrue eta else vfalse eta).
 
+  Context (fand : func (tprod tbool tbool) tbool).
+  Context (interp_fand : forall eta v1 v2, inspect_vbool (interp_func fand (interp_pair v1 v2)) =
+                                           andb (inspect_vbool v1) (inspect_vbool (eta:=eta) v2)).
+
+  Lemma whp_and a b : whp a /\ whp b -> whp (expr_func fand (expr_pair a b)).
+  Proof.
+      cbv [indist universal_security_game whp interp]; intros.
+      cbn [interp_fixed].
+      eapply Proper_negligible. 
+      {
+        intro eta.
+        setoid_rewrite (case_tbool eta
+                          (interp_func fand
+                                       (interp_pair (interp_fixed a eta (adv eta _) _)
+                                                    (interp_fixed b eta (adv eta _) _)))).
+        setoid_rewrite interp_fand.
+        repeat setoid_rewrite Bind_unused.
+        repeat setoid_rewrite <-Bind_assoc.
+        repeat setoid_rewrite Bind_Ret_l.
+        repeat setoid_rewrite <-Bind_assoc in H.
+        repeat setoid_rewrite Bind_Ret_l in H.
+        destruct H as [Ha Hb].
+        cbv [andb].
+        Lemma if_if (b t f:bool) {T} (x y:T) :
+          (if (if b then t else f) then x else y)
+          = 
+          (if b then (if t then x else y) else (if f then x else y)).
+        Proof. destruct b, t, f; trivial. Qed.
+        setoid_rewrite if_if.
+        setoid_rewrite <-case_tbool.
+  Admitted.
+
   Section Equality.
     Definition eqwhp {t} (e1 e2:expr t) : Prop := whp (expr_func feqb (expr_pair e1 e2)).
 

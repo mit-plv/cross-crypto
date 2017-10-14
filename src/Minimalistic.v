@@ -263,11 +263,11 @@ Section Language.
 
   Section Security.
     (* the adversary is split into three parts for no particular reason. It first decides how much randomness it will need, then interacts with the protocol (repeated calls to [adverary] with all messages up to now as input), and then tries to claim victory ([distinguisher]). There is no explicit sharing of state between these procedures, but all of them get the same random inputs in the security game. The handling of state is a major difference between FCF [OracleComp] and this framework *)
-    Definition universal_security_game
+    Definition universal_security_game {t}
                (evil_rand_indices: forall eta:nat, PositiveSet.t)
                (adversary:forall (eta:nat) (rands: PositiveMap.t (interp_type trand eta)), interp_type (tlist tmessage) eta -> interp_type tmessage eta)
-               (distinguisher: forall {t} (eta:nat) (rands: PositiveMap.t (interp_type trand eta)), interp_type t eta -> Datatypes.bool)
-               (eta:nat) {t:type} (e:expr t) : Comp Datatypes.bool :=
+               (distinguisher: forall (eta:nat) (rands: PositiveMap.t (interp_type trand eta)), interp_type t eta -> Datatypes.bool)
+               (eta:nat) (e:expr t) : Comp Datatypes.bool :=
       evil_rands <-$ generate_randomness eta (evil_rand_indices eta);
         out <-$ interp e eta (adversary eta (evil_rands));
         ret (distinguisher eta evil_rands out).
@@ -292,15 +292,8 @@ Section Language.
       cbn [interp_fixed].
       
       specialize (H adl adv
-        (fun t =>
-           match (EqDec_dec _ t1 t) with
-           | left e => eq_rect t1 (fun t => forall eta, _ -> interp_type t _ -> _)
-                              (fun eta rands v => dst t2 eta rands (interp_func f v)) t e
-           | right _ => dst t
-           end)). 
+                    (fun eta rands v => dst eta rands (interp_func f v))).
       cbn [id] in *.
-      destruct (EqDec_dec eqdec_type t1 t1) as [e|] in *; try contradiction; [].
-      rewrite (UIP_dec (EqDec_dec _) e eq_refl) in H; cbn [eq_rect] in H.
 
       setoid_rewrite <-Bind_assoc; setoid_rewrite Bind_Ret_l.
       setoid_rewrite <-Bind_assoc in H; setoid_rewrite Bind_Ret_l in H.
@@ -322,6 +315,30 @@ Section Language.
 
   Definition whp (e:expr tbool) := e ≈ (expr_const vtrue).
 
+  Definition whp_game
+             (evil_rand_indices: forall eta:nat, PositiveSet.t)
+             (adversary:forall (eta:nat) (rands: PositiveMap.t (interp_type trand eta)), interp_type (tlist tmessage) eta -> interp_type tmessage eta)
+             (eta:nat) (e:expr tbool) : Comp Datatypes.bool :=
+    evil_rands <-$ generate_randomness eta (evil_rand_indices eta);
+    out <-$ interp e eta (adversary eta (evil_rands));
+    ret negb (inspect_vbool out).
+
+  Definition whp_simple (e : expr tbool) :=
+    forall adl adv,
+      negligible (fun eta : nat => Pr[whp_game adl adv eta e]).
+
+  Lemma whp_game_wins_indist_game :
+    forall adl adv eta e,
+    exists dst,
+      let game :=
+          universal_security_game adl adv dst eta in
+      Pr[whp_game adl adv eta e] <= |Pr[game e] - Pr[game (expr_const vtrue)]|.
+  Admitted.
+
+  Lemma whp_simple_to_whp :
+    forall e, whp_simple e -> whp e.
+  Admitted.
+
   Local Existing Instance eq_subrelation | 5.
   (* Local Instance subrelation_eq_Comp_eq {A} : subrelation eq (Comp_eq(A:=A)) | 2 := eq_subrelation _. *)
 
@@ -333,6 +350,35 @@ Section Language.
   Context (fand : func (tprod tbool tbool) tbool).
   Context (interp_fand : forall eta v1 v2, inspect_vbool (interp_func fand (interp_pair v1 v2)) =
                                            andb (inspect_vbool v1) (inspect_vbool (eta:=eta) v2)).
+  Context (f_or : func (tprod tbool tbool) tbool).
+  Context (interp_f_or : forall eta v1 v2,
+              inspect_vbool (interp_func f_or (interp_pair v1 v2)) =
+              orb (inspect_vbool v1) (inspect_vbool (eta:=eta) v2)).
+  Context (fimpl : func (tprod tbool tbool) tbool).
+  Context (interp_fimpl : forall eta v1 v2,
+              inspect_vbool (interp_func fimpl (interp_pair v1 v2)) =
+              implb (inspect_vbool v1) (inspect_vbool (eta:=eta) v2)).
+
+  Definition always (e : expr tbool) :=
+    forall eta adv rands, interp_fixed e eta adv rands = vtrue eta.
+
+  Definition impl (e1 e2 : expr tbool) :=
+    always (expr_func fimpl (expr_pair e1 e2)).
+
+  Lemma whp_impl a b : impl a b -> whp a -> whp b.
+  Proof.
+    cbv [whp indist universal_security_game interp]; intros.
+    cbn [interp_fixed] in H0 |- *.
+    repeat setoid_rewrite Bind_unused.
+    repeat setoid_rewrite <-Bind_assoc.
+    repeat setoid_rewrite Bind_Ret_l.
+    repeat setoid_rewrite Bind_unused in H0.
+    repeat setoid_rewrite <-Bind_assoc in H0.
+    repeat setoid_rewrite Bind_Ret_l in H0.
+    eapply negligible_le; try eapply (H0 adl adv dst).
+    cbv beta.
+    intro n.
+  Admitted.
 
   Lemma whp_and a b : whp a /\ whp b -> whp (expr_func fand (expr_pair a b)).
   Proof.
@@ -594,15 +640,8 @@ Section Language.
     intro H.
     specialize (H (fun _ => PositiveSet.empty)
                   (fun _ _ _ => (vmessage_exists _))
-                  (fun t =>
-                     match (EqDec_dec _ tbool t) with
-                     | left e => eq_rect tbool (fun t => forall eta, _ -> interp_type t _ -> _)
-                                         (fun eta rands v => inspect_vbool v) t e
-                     | right _ => fun _ _ _ => false
-                     end)). 
+                  (fun eta rands v => inspect_vbool v)).
     cbv [id] in *.
-    destruct (EqDec_dec eqdec_type tbool tbool) as [e|] in *; try contradiction; [].
-    rewrite (UIP_dec (EqDec_dec _) e eq_refl) in H; cbn [eq_rect] in H.
     setoid_rewrite Bind_unused in H.
     setoid_rewrite <-Bind_assoc in H.
     do 2 setoid_rewrite Bind_Ret_l in H.

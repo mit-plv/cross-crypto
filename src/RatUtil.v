@@ -6,6 +6,7 @@ Create HintDb ratsimpl discriminated.
 
 Hint Immediate (@reflexivity Rat eqRat _) : rat.
 Hint Immediate (@reflexivity Rat leRat _) : rat.
+Hint Immediate (rat0_le_all) : rat.
 
 Lemma maxRat_same r : maxRat r r = r.
 Proof. intros; cbv [maxRat]; destruct (bleRat r r) eqn:?; trivial. Qed.

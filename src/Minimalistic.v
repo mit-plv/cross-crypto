@@ -369,6 +369,76 @@ Section Language.
     auto.
   Qed.
 
+  Lemma pr_weaken :
+    forall T (X : Comp T) Y1 Y2,
+      (forall x, In x (getSupport X) -> Bool.leb (Y1 x) (Y2 x)) ->
+      Pr[x <-$ X; ret Y1 x] <= Pr[x <-$ X; ret Y2 x].
+  Proof.
+    intros.
+    cbv [evalDist].
+    eapply sumList_le.
+    intros.
+    eapply ratMult_leRat_compat; eauto with rat.
+    repeat match goal with
+    | [ |- context[EqDec_dec bool_EqDec (?f ?b) true] ] =>
+      destruct (EqDec_dec bool_EqDec (f b) true); auto with rat
+    | [ H : context[In _ _ -> _], H1 : In ?b _, e : ?f a = true |- _ ] =>
+      specialize (H b H1);
+        rewrite e in H; simpl in H
+    end.
+    exfalso; auto.
+  Qed.
+
+  Lemma pr_dist_bound_helper :
+    forall T (eT : EqDec T) (XY : Comp (T * T)) Z,
+      Pr[xy <-$ XY; ret Z (fst xy)] <=
+      Pr[xy <-$ XY; ret Z (snd xy)] +
+      Pr[xy <-$ XY; ret negb (fst xy ?= snd xy)].
+  Proof.
+    intros ? ? ? Z.
+    eapply leRat_trans with
+        (r2 := Pr [xy <-$ XY;
+                   ret Z (snd xy) && (fst xy ?= snd xy) ||
+                       negb (fst xy ?= snd xy)]).
+    {
+      eapply pr_weaken.
+      intros [x y] _; simpl.
+      pose proof (eqb_leibniz x y).
+      destruct (x ?= y); simpl;
+        intuition; subst; destruct (Z y); try destruct (Z x); intuition.
+    }
+    eapply leRat_trans with
+        (r2 := Pr [xy <-$ XY; ret Z (snd xy) && (fst xy ?= snd xy)] +
+               Pr [xy <-$ XY; ret negb (fst xy ?= snd xy) ]);
+      try eapply evalDist_orb_le.
+    eapply ratAdd_leRat_compat_l.
+    eapply pr_weaken;
+      intros [x y ] _; simpl;
+        destruct (Z y); destruct (x ?= y); simpl; auto.
+  Qed.
+
+  Lemma Bind_assoc_in_Bind : forall T1 T2 T3 T4 (a : Comp T1) (b : T1 -> Comp T2) (c : T1 -> T2 -> Comp T3) (d : T1 -> T3 -> Comp T4),
+      Comp_eq
+        (x <-$ a; y <-$ (z <-$ b x; c x z); d x y)
+        (x <-$ a; z <-$ b x; y <-$ c x z; d x y).
+    intros.
+    setoid_rewrite <- Bind_assoc.
+    reflexivity.
+  Qed.
+
+  Lemma indist_game_wins_whp_game :
+    forall adl adv dst eta e,
+      let game :=
+          universal_security_game adl adv dst eta in
+  |Pr[game e] - Pr[game (expr_const vtrue)]|
+  <= Pr[whp_game adl adv eta e].
+    intros adl adv dst eta e.
+    cbv [universal_security_game whp_game interp].
+    cbn [interp_fixed].
+    setoid_rewrite Bind_unused.
+    repeat rewrite Bind_assoc_in_Bind.
+  Admitted.
+
   Local Existing Instance eq_subrelation | 5.
   (* Local Instance subrelation_eq_Comp_eq {A} : subrelation eq (Comp_eq(A:=A)) | 2 := eq_subrelation _. *)
 

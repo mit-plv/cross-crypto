@@ -310,7 +310,10 @@ Section Language.
 
   Context (vtrue vfalse : forall eta, interp_type tbool eta)
           (inspect_vbool : forall eta, interp_type tbool eta -> bool)
-          (case_tbool : forall eta (b:interp_type tbool eta), b = if inspect_vbool eta b then vtrue eta else vfalse eta).
+          (case_tbool : forall eta (b:interp_type tbool eta), b = if inspect_vbool eta b then vtrue eta else vfalse eta)
+          (inspect_vtrue : forall eta, inspect_vbool eta (vtrue eta) = true)
+          (inspect_vfalse : forall eta, inspect_vbool eta (vfalse eta) = false).
+
   Arguments inspect_vbool {eta}.
 
   Definition whp (e:expr tbool) := e ≈ (expr_const vtrue).
@@ -327,17 +330,44 @@ Section Language.
     forall adl adv,
       negligible (fun eta : nat => Pr[whp_game adl adv eta e]).
 
+  Lemma pr_false : Pr[ret false] = 0.
+  Proof.
+    cbn; destruct (EqDec_dec bool_EqDec false true); congruence.
+  Qed.
+
   Lemma whp_game_wins_indist_game :
-    forall adl adv eta e,
+    forall adl adv e,
     exists dst,
+      forall eta,
       let game :=
           universal_security_game adl adv dst eta in
-      Pr[whp_game adl adv eta e] <= |Pr[game e] - Pr[game (expr_const vtrue)]|.
-  Admitted.
+      Pr[whp_game adl adv eta e] <=
+        |Pr[game e] - Pr[game (expr_const vtrue)]|.
+  Proof.
+    intros.
+    exists (fun _ _ out => negb (inspect_vbool out)).
+    intro.
+    cbv [universal_security_game whp_game interp].
+    cbn [interp_fixed].
+    repeat rewrite Bind_unused.
+    repeat rewrite Bind_Ret_l.
+    rewrite inspect_vtrue.
+    cbv [negb].
+    rewrite pr_false.
+    rewrite ratDistance_comm.
+    rewrite ratDistance_from_0.
+    auto with rat.
+  Qed.
 
-  Lemma whp_simple_to_whp :
-    forall e, whp_simple e -> whp e.
-  Admitted.
+  Lemma whp_to_whp_simple :
+    forall e, whp e -> whp_simple e.
+  Proof.
+    cbv [whp_simple whp indist].
+    intros.
+    destruct (whp_game_wins_indist_game adl adv e) as [dst ?].
+    eapply negligible_le; try eapply (H adl adv dst).
+    auto.
+  Qed.
 
   Local Existing Instance eq_subrelation | 5.
   (* Local Instance subrelation_eq_Comp_eq {A} : subrelation eq (Comp_eq(A:=A)) | 2 := eq_subrelation _. *)
@@ -612,8 +642,6 @@ Section Language.
     eapply negligible_0.
   Qed.
 
-  Context (inspect_vtrue : forall eta, inspect_vbool (vtrue eta) = true).
-  Context (inspect_vfalse : forall eta, inspect_vbool (vfalse eta) = false).
   Context (vmessage_exists : forall eta, interp_type tmessage eta).
 
   (* TODO: contribute to FCF *)

@@ -35,13 +35,13 @@ Section Language.
   Global Instance randomness_map_eq_dec {eta} : EqDec (PositiveMap.t (interp_type trand eta)). Admitted.
 
   Context (cast_rand : forall eta, Bvector eta -> interp_type trand eta).
-  Section GenerateRandomness. 
+  Section GenerateRandomness.
     Context (eta:nat).
 
     Definition genrand : Comp _ := (r <-$ {0,1}^eta; ret (cast_rand eta r)).
     (* TODO: use [genrand] in the remainder of this section *)
 
-    Definition generate_randomness_single i rndC := 
+    Definition generate_randomness_single i rndC :=
       rnds' <-$ rndC;
         ri <-$ {0,1}^eta;
         ret (PositiveMap.add i (cast_rand eta ri) rnds').
@@ -52,7 +52,7 @@ Section Language.
                           idxs
                           (ret (PositiveMap.empty _)).
 
-    Lemma empty_randomness : 
+    Lemma empty_randomness :
       Comp_eq (generate_randomness PositiveSet.empty)
               (ret (PositiveMap.empty _)).
     Proof.
@@ -81,14 +81,14 @@ Section Language.
       destruct (Pos.eq_dec x y).
       {
         etransitivity.
-        { 
+        {
           do 3 (eapply Proper_Bind; [reflexivity|];
                 cbv [pointwise_relation]; intros).
 
     (* Line below fails because Ret is not proper over
           PositiveMap.eq *)
           (* rewrite add_add_eq. *)
-          
+
     Admitted.
 
     Lemma add_generate_randomness {A} (f:_->Comp A) x s s' :
@@ -123,7 +123,7 @@ Section Language.
       rewrite add_generate_randomness
         by eauto using PositiveSetProperties.Dec.F.remove_1.
 
-      (* TODO: this should work but doesn't:  
+      (* TODO: this should work but doesn't:
          setoid_rewrite PositiveMapProperties.F.add_eq_o *)
       f_equiv; cbv [pointwise_relation]; intros.
       etransitivity. {
@@ -132,7 +132,7 @@ Section Language.
         rewrite PositiveMapProperties.F.add_eq_o by reflexivity.
         eapply reflexivity. }
       rewrite Bind_unused; reflexivity.
-    Qed. 
+    Qed.
 
     Lemma Proper_Bind_generate_randomness {A: Set} idxs :
       Proper (
@@ -290,7 +290,7 @@ Section Language.
     Proof.
       cbv [Proper respectful indist universal_security_game interp]; intros.
       cbn [interp_fixed].
-      
+
       specialize (H adl adv
                     (fun eta rands v => dst eta rands (interp_func f v))).
       cbn [id] in *.
@@ -363,7 +363,7 @@ Section Language.
     forall e, whp e -> whp_simple e.
   Proof.
     cbv [whp_simple whp indist].
-    intros.
+    intros e H adl adv.
     destruct (whp_game_wins_indist_game adl adv e) as [dst ?].
     eapply negligible_le; try eapply (H adl adv dst).
     auto.
@@ -390,40 +390,187 @@ Section Language.
   Qed.
 
   Lemma pr_dist_bound_helper :
-    forall T (eT : EqDec T) (XY : Comp (T * T)) Z,
-      Pr[xy <-$ XY; ret Z (fst xy)] <=
-      Pr[xy <-$ XY; ret Z (snd xy)] +
-      Pr[xy <-$ XY; ret negb (fst xy ?= snd xy)].
+    forall {WT : Set} T (eT : EqDec T)
+           (XY : WT -> Comp (T * T)) (W : Comp WT) Z,
+      Pr[w <-$ W; xy <-$ XY w; ret Z w (fst xy)] <=
+      Pr[w <-$ W; xy <-$ XY w; ret Z w (snd xy)] +
+      Pr[w <-$ W; xy <-$ XY w; ret negb (fst xy ?= snd xy)].
   Proof.
-    intros ? ? ? Z.
-    eapply leRat_trans with
-        (r2 := Pr [xy <-$ XY;
-                   ret Z (snd xy) && (fst xy ?= snd xy) ||
-                       negb (fst xy ?= snd xy)]).
-    {
-      eapply pr_weaken.
-      intros [x y] _; simpl.
-      pose proof (eqb_leibniz x y).
-      destruct (x ?= y); simpl;
-        intuition; subst; destruct (Z y); try destruct (Z x); intuition.
-    }
-    eapply leRat_trans with
-        (r2 := Pr [xy <-$ XY; ret Z (snd xy) && (fst xy ?= snd xy)] +
-               Pr [xy <-$ XY; ret negb (fst xy ?= snd xy) ]);
-      try eapply evalDist_orb_le.
-    eapply ratAdd_leRat_compat_l.
-    eapply pr_weaken;
-      intros [x y ] _; simpl;
-        destruct (Z y); destruct (x ?= y); simpl; auto.
+    intros.
+    cbn [evalDist].
+    rewrite <- sumList_sum.
+    eapply sumList_le.
+    intros.
+    rewrite <- ratMult_distrib.
+    eapply ratMult_leRat_compat; eauto with rat.
+    rewrite <- sumList_sum.
+    eapply sumList_le.
+    intros [x y] ?.
+    rewrite <- ratMult_distrib.
+    eapply ratMult_leRat_compat; eauto with rat.
+    cbv [fst snd].
+    repeat match goal with
+           | [ |- context[EqDec_dec ?X ?Y ?Z] ] => destruct (EqDec_dec X Y Z)
+           end;
+      pose proof (eqb_leibniz x y);
+      destruct (x ?= y); intuition; subst; try congruence.
   Qed.
 
-  Lemma Bind_assoc_in_Bind : forall T1 T2 T3 T4 (a : Comp T1) (b : T1 -> Comp T2) (c : T1 -> T2 -> Comp T3) (d : T1 -> T3 -> Comp T4),
+  Lemma sum_dist :
+    forall a b c,
+      a <= b + c ->
+      b <= a + c ->
+  |a - b| <= c.
+  Proof.
+    intros.
+    eapply ratDistance_leRat_both;
+      rewrite <- ratSubtract_ratAdd_inverse with (r2 := c);
+      eauto using ratSubtract_leRat_l.
+  Qed.
+
+  Definition swapcomp {T1 T2 : Set} {e1 : EqDec T1} {e2 : EqDec T2}
+             (XY : Comp (T1 * T2)) : Comp (T2 * T1) :=
+    xy <-$ XY; ret (snd xy, fst xy).
+
+  Lemma swapcomp_compat :
+    forall {T1 T2 T3 : Set} {e1 : EqDec T1} {e2 : EqDec T2}
+           (XY : Comp (T1 * T2)) (f : T1 -> T2 -> Comp T3),
+      Comp_eq
+        (xy <-$ XY; f (fst xy) (snd xy))
+        (yx <-$ swapcomp XY; f (snd yx) (fst yx)).
+  Proof.
+    intros.
+    cbv [swapcomp].
+    rewrite <- Bind_assoc.
+    setoid_rewrite Bind_Ret_l.
+    cbn [fst snd].
+    reflexivity.
+  Qed.
+
+  Lemma pr_dist_bound :
+    forall WT (W : Comp WT) T (eT : EqDec T) (XY : WT -> Comp (T * T)) Z,
+      |Pr[w <-$ W; xy <-$ XY w; ret Z w (fst xy)] -
+       Pr[w <-$ W; xy <-$ XY w; ret Z w (snd xy)]|
+      <=
+      Pr[w <-$ W; xy <-$ XY w; ret negb (fst xy ?= snd xy)].
+  Proof.
+    intros.
+    eapply sum_dist.
+    - eapply pr_dist_bound_helper.
+    - assert (forall w,
+                 Comp_eq
+                   (xy <-$ XY w; ret Z w (snd xy))
+                   (yx <-$ swapcomp (XY w); ret Z w (fst yx))) as E.
+      {
+        intros.
+        eapply swapcomp_compat with (f := fun _ y => ret Z w y).
+      }
+      setoid_rewrite E; clear E.
+
+      assert (forall w,
+                 Comp_eq
+                   (xy <-$ XY w; ret Z w (fst xy))
+                   (yx <-$ swapcomp (XY w); ret Z w (snd yx))) as E.
+      {
+        intros.
+        eapply swapcomp_compat with (f := fun x _ => ret Z w x).
+      }
+      setoid_rewrite E; clear E.
+
+
+      assert (forall w,
+                 Comp_eq
+                   (xy <-$ XY w; ret negb (fst xy ?= snd xy))
+                   (yx <-$ swapcomp (XY w); ret negb (fst yx ?= snd yx))) as E.
+      {
+        intros.
+        assert (forall xy,
+                   Comp_eq (ret negb (fst xy ?= snd xy))
+                           (ret negb (snd xy ?= fst xy))) as E1.
+        {
+          intros.
+          setoid_rewrite eqb_symm at 2.
+          reflexivity.
+        }
+        setoid_rewrite E1 at 2; clear E1.
+        eapply swapcomp_compat with (f := fun x y => ret negb (x ?= y)).
+      }
+      setoid_rewrite E; clear E.
+      eapply pr_dist_bound_helper.
+  Qed.
+
+  Lemma Bind_assoc_in_Bind :
+    forall T1 T2 T3 T4
+           (a : Comp T1) (b : T1 -> Comp T2)
+           (c : T1 -> T2 -> Comp T3) (d : T1 -> T3 -> Comp T4),
       Comp_eq
         (x <-$ a; y <-$ (z <-$ b x; c x z); d x y)
         (x <-$ a; z <-$ b x; y <-$ c x z; d x y).
     intros.
     setoid_rewrite <- Bind_assoc.
     reflexivity.
+  Qed.
+
+  Lemma Bind_beta_fst :
+    forall {T1 T2 T3} {e1 : EqDec T1} {e2 : EqDec T2}
+           (X : Comp T1) (Y : Comp T2) (f : T1 -> Comp T3),
+    Comp_eq (x <-$ X; f x)
+            (xy <-$ (x <-$ X; y <-$ Y; ret (x, y)); f (fst xy)).
+  Proof.
+    intros.
+    repeat setoid_rewrite <- Bind_assoc.
+    setoid_rewrite Bind_Ret_l.
+    cbv [fst snd].
+    setoid_rewrite Bind_unused.
+    reflexivity.
+  Qed.
+
+  Lemma Bind_beta_snd :
+    forall {T1 T2 T3} {e1 : EqDec T1} {e2 : EqDec T2}
+           (X : Comp T1) (Y : Comp T2) (g : T2 -> Comp T3),
+    Comp_eq (y <-$ Y; g y)
+            (xy <-$ (x <-$ X; y <-$ Y; ret (x, y)); g (snd xy)).
+  Proof.
+    intros.
+    repeat setoid_rewrite <- Bind_assoc.
+    setoid_rewrite Bind_Ret_l.
+    cbv [fst snd].
+    setoid_rewrite Bind_unused.
+    reflexivity.
+  Qed.
+
+  Definition tbool_rect eta
+             (P : interp_type tbool eta -> Type)
+             (f : P (vfalse eta)) (t : P (vtrue eta))
+             (b : interp_type tbool eta) : P b.
+    rewrite case_tbool; destruct (inspect_vbool b); eauto.
+  Defined.
+
+  Lemma vfalse_eq_vbool_false eta :
+    (vfalse eta ?= vtrue eta) = false.
+  Proof.
+    eapply eqb_false_iff.
+    intro.
+    assert (false = true).
+    {
+      rewrite <- inspect_vfalse with (eta := eta).
+      rewrite <- inspect_vtrue with (eta := eta).
+      f_equal; eauto.
+    }
+    congruence.
+  Qed.
+
+  Lemma inspect_vbool_equality :
+    forall eta b, inspect_vbool b = (b ?= vtrue eta).
+  Proof.
+    intros.
+    eapply tbool_rect with (P := fun b => inspect_vbool b = (b ?= vtrue eta));
+      repeat match goal with
+             | [ |- context[inspect_vbool]] =>
+               rewrite inspect_vfalse || rewrite inspect_vtrue
+             | [ |- context[_ ?= _]] =>
+               rewrite vfalse_eq_vbool_false || rewrite eqb_refl
+             end; reflexivity.
   Qed.
 
   Lemma indist_game_wins_whp_game :
@@ -436,8 +583,99 @@ Section Language.
     cbv [universal_security_game whp_game interp].
     cbn [interp_fixed].
     setoid_rewrite Bind_unused.
-    repeat rewrite Bind_assoc_in_Bind.
-  Admitted.
+
+    set (ER := generate_randomness eta (adl eta)).
+    set (XR := (fun evil_rands =>
+                 rands <-$ generate_randomness eta (randomness_indices e);
+                 ret interp_fixed e eta (adv eta evil_rands) rands)).
+    set (Y' := ret vtrue eta).
+    set (XY :=
+           (fun evil_rands =>
+              x <-$ XR evil_rands;
+              y <-$ (ret vtrue eta);
+              ret (x, y))).
+    set (Z := dst eta).
+
+    cut (|Pr [er <-$ ER;
+              x <-$ XR er;
+              ret Z er x] -
+          Pr [er <-$ ER; y <-$ Y'; ret Z er y]|
+         <=
+         Pr [er <-$ ER;
+             x <-$ XR er;
+             ret negb (inspect_vbool x)]); try solve [intuition].
+
+    assert (forall er,
+               Comp_eq
+                 (x <-$ XR er;
+                  ret Z er x)
+                 (xy <-$ XY er;
+                  ret Z er (fst xy))) as E.
+    {
+      intro er.
+      eapply Bind_beta_fst with (X := XR er) (Y := Y').
+    }
+    setoid_rewrite E; clear E.
+
+    assert (forall er,
+               Comp_eq
+                 (y <-$ Y';
+                  ret Z er y)
+                 (xy <-$ XY er;
+                  ret Z er (snd xy))) as E.
+    {
+      intro er.
+      eapply Bind_beta_snd with (X := XR er) (Y := Y').
+    }
+    setoid_rewrite E; clear E.
+
+    assert (forall er,
+               Comp_eq
+                 (x <-$ XR er; ret negb (inspect_vbool x))
+                 (xy <-$ XY er; ret negb (fst xy ?= snd xy))) as E.
+    {
+      intro er.
+      subst XR XY; cbv beta.
+      repeat rewrite <- Bind_assoc.
+      setoid_rewrite <- Bind_assoc.
+      repeat setoid_rewrite Bind_Ret_l.
+      cbv [fst snd].
+
+      assert (forall x,
+                 Comp_eq
+                   (ret negb (inspect_vbool
+                                (interp_fixed e eta (adv eta er) x)))
+                   (ret negb (interp_fixed e eta (adv eta er) x
+                                           ?= vtrue eta))) as E1.
+      {
+        intro.
+        rewrite inspect_vbool_equality.
+        reflexivity.
+      }
+      setoid_rewrite E1; clear E1.
+      reflexivity.
+    }
+    setoid_rewrite E; clear E.
+
+    eapply pr_dist_bound.
+  Qed.
+
+  Lemma whp_simple_to_whp :
+    forall e, whp_simple e -> whp e.
+  Proof.
+    cbv [whp_simple whp indist].
+    intros.
+    eapply negligible_le.
+    intros.
+    eapply indist_game_wins_whp_game.
+    auto.
+  Qed.
+
+  Lemma whp_whp_simple :
+    forall e, whp e <-> whp_simple e.
+  Proof.
+    intuition eauto using whp_simple_to_whp, whp_to_whp_simple.
+  Qed.
 
   Local Existing Instance eq_subrelation | 5.
   (* Local Instance subrelation_eq_Comp_eq {A} : subrelation eq (Comp_eq(A:=A)) | 2 := eq_subrelation _. *)
@@ -465,26 +703,323 @@ Section Language.
   Definition impl (e1 e2 : expr tbool) :=
     always (expr_func fimpl (expr_pair e1 e2)).
 
+  Lemma Bind_assoc_2 :
+    forall {A B C : Set} {e : EqDec (A * B)}
+           (cA : Comp A) (f : A -> Comp B) (g : A -> B -> Comp C),
+      Comp_eq (x <-$ cA; y <-$ f x; g x y)
+              (xy <-$ (x <-$ cA; y <-$ f x; ret (x, y));
+                 g (fst xy) (snd xy)).
+  Proof.
+    intros.
+    repeat setoid_rewrite <- Bind_assoc.
+    setoid_rewrite Bind_Ret_l.
+    reflexivity.
+  Qed.
+
+  Lemma Bind_assoc_pure :
+    forall {T1 T2 T3 : Set} {e2 : EqDec T2} {e3 : EqDec T3}
+           (cA : Comp T1) (f : T2 -> T3) (g : T1 -> T2),
+    Comp_eq (x <-$ cA;
+               ret f (g x))
+            (y <-$ (x <-$ cA;
+                      ret g x);
+               ret f y).
+  Proof.
+    intros.
+    rewrite <- Bind_assoc.
+    setoid_rewrite Bind_Ret_l.
+    reflexivity.
+  Qed.
+
+  Definition comp_prod {A : Set} {B : Set} {e : EqDec (A * B)}
+             (c1 : Comp A) (c2 : Comp B) :=
+    (x1 <-$ c1; x2 <-$ c2; ret (x1, x2)).
+
+  Lemma Comp_eq_prod :
+    forall {A B : Set} {e : EqDec (A * B)}
+           (cA1 cA2 : Comp A) (cB1 cB2 : Comp B),
+      Comp_eq cA1 cA2 -> Comp_eq cB1 cB2 ->
+      Comp_eq (comp_prod cA1 cB1) (comp_prod cA2 cB2).
+  Proof.
+    intros ? ? ? ? ? ? ? H1 H2.
+    cbv [comp_prod].
+    setoid_rewrite H1.
+    setoid_rewrite H2.
+    reflexivity.
+  Qed.
+
+  Lemma find_trivial_filter :
+    forall {T} (m : PositiveMap.t T)
+           (s : PositiveSet.t)
+           (x : positive),
+      PositiveSet.In x s ->
+      PositiveMap.find x m =
+      PositiveMap.find x
+                       (PositiveMapProperties.filter
+                          (fun k _ => PositiveSet.mem k s) m).
+  Proof.
+    intros.
+    assert (forall e,
+               PositiveMap.MapsTo x e m <->
+               PositiveMap.MapsTo x e
+                                  (PositiveMapProperties.filter
+                                     (fun k _ => PositiveSet.mem k s) m)) as M.
+    - intros.
+      split.
+      + intros.
+        eapply PositiveMapProperties.filter_iff; intuition.
+      + intros MF.
+        eapply PositiveMapProperties.filter_iff in MF; intuition.
+    - pose proof (PositiveMapProperties.F.find_mapsto_iff m x) as F.
+      remember (PositiveMap.find x m) as o.
+      destruct o as [t|].
+      + assert (PositiveMap.MapsTo x t m).
+        {
+          eapply F; eauto.
+        }
+        assert (PositiveMap.MapsTo
+                  x t
+                  (PositiveMapProperties.filter
+                     (fun k _ => PositiveSet.mem k s) m)).
+        {
+          eapply M.
+          eauto.
+        }
+        symmetry.
+        eapply PositiveMapProperties.filter_iff; intuition.
+      + remember (PositiveMap.find
+                    x
+                    (PositiveMapProperties.filter
+                       (fun k _ => PositiveSet.mem k s) m)) as p.
+        destruct p; eauto.
+        exfalso.
+        symmetry in Heqp.
+        rewrite <- PositiveMapProperties.F.find_mapsto_iff in Heqp.
+        rewrite <- M in Heqp.
+        rewrite F in Heqp.
+        congruence.
+Qed.
+
+  Lemma restrict_randomness :
+    forall {t} eta adv (e : expr t)
+           (r : PositiveMap.t (interp_type trand eta))
+           (s : PositiveSet.t),
+      PositiveSet.Subset (randomness_indices e) s ->
+      interp_fixed e eta adv r =
+      interp_fixed e eta adv
+                   (PositiveMapProperties.filter
+                      (fun k _ => PositiveSet.mem k s)
+                      r).
+  Proof.
+    intros ? ? ? ? ?.
+    induction e.
+    - reflexivity.
+    - cbn [interp_fixed randomness_indices] in *.
+      intros s S.
+      assert (PositiveMap.find idx r =
+              PositiveMap.find idx
+                               (PositiveMapProperties.filter
+                                  (fun k _  =>
+                                     PositiveSet.mem k s) r)) as E.
+      {
+        eapply find_trivial_filter.
+        eapply S.
+        eapply PositiveSetProperties.Dec.F.singleton_iff.
+        eauto.
+      }
+      rewrite E; eauto.
+    - cbn [interp_fixed randomness_indices] in *.
+      intros.
+      erewrite IHe; eauto.
+    - cbn [interp_fixed randomness_indices] in *.
+      intros.
+      erewrite IHe; eauto.
+    - cbn [interp_fixed randomness_indices].
+      intros.
+      edestruct subset_union; eauto.
+      erewrite IHe1; eauto.
+      erewrite IHe2; eauto.
+  Qed.
+
+  (* This lemma lets us avoid using canonicity of maps
+   * (since we don't actually have that)
+   *)
+  Lemma lift_proper :
+    forall {T1 T2 T3 : Set} {e3 : EqDec T3}
+           (c : Comp T1) (R : T2 -> T2 -> Prop)
+           (g1 g2 : T1 -> T2) (f : T2 -> T3),
+    (forall x, In x (getSupport c) -> R (g1 x) (g2 x)) ->
+    Proper (R ==> eq) f ->
+    Comp_eq (x <-$ c; ret f (g1 x)) (x <-$ c; ret f (g2 x)).
+  Proof.
+    intros ? ? ? ? ? ? ? ? ? Rg Pf.
+    cbv [Comp_eq image_relation pointwise_relation].
+    cbn [evalDist].
+    intros.
+    eapply sumList_body_eq.
+    intros x ?.
+    assert (f (g1 x) = f (g2 x)) as E by eauto; rewrite E; reflexivity.
+  Qed.
+
+  Lemma generate_randomness_single_support :
+    forall eta m i r,
+      In m (getSupport (generate_randomness_single eta i r)) ->
+      forall x,
+        PositiveMap.In x m -> x = i \/ (exists m',
+                                           In m' (getSupport r) /\
+                                           PositiveMap.In x m').
+  Proof.
+    intros ? ? ? ? I ? ?.
+    cbn [generate_randomness_single getSupport] in I.
+    
+  Admitted.
+
+  Lemma generate_randomness_support :
+    forall eta s m,
+      In m (getSupport (generate_randomness eta s)) ->
+      forall x,
+        PositiveMap.In x m -> PositiveSet.In x s.
+    cbv [generate_randomness] in *.
+    intros eta s.
+    eapply PositiveSetProperties.fold_rec with
+        (A := Comp (PositiveMap.t (interp_type trand eta)))
+        (P := fun s r =>
+                forall m,
+                  In m (getSupport r) ->
+                  forall x,
+                    PositiveMap.In x m -> PositiveSet.In x s)
+        (f := generate_randomness_single eta)
+        (i := ret PositiveMap.empty (interp_type trand eta)).
+    - intros.
+      exfalso.
+      cbv [In getSupport] in *.
+      intuition.
+      subst.
+      eapply PositiveMapProperties.F.empty_in_iff; eauto.
+    - intros.
+      clear H0.
+      edestruct generate_randomness_single_support as [|[? []]]; eauto.
+      + subst.
+        eapply H1; eauto.
+      + assert (PositiveSet.In x0 s') by eauto.
+        eapply H1; eauto.
+  Qed.
+
+  Lemma restrict_irrelevant :
+    forall {T} (m : PositiveMap.t T) s,
+      (forall x, PositiveMap.In x m -> PositiveSet.In x s) ->
+      PositiveMap.Equal m (PositiveMapProperties.filter
+                             (fun k _  =>
+                                PositiveSet.mem k s) m).
+  Admitted.
+
+  Lemma interp_fixed_proper :
+    forall {t} (e : expr t) eta adv,
+    Proper (PositiveMap.Equal ==> eq) (interp_fixed e eta adv).
+  Admitted.
+
+  Lemma generate_more_randomness :
+    forall {t} eta adv (e : expr t) (s : PositiveSet.t),
+      PositiveSet.Subset (randomness_indices e) s ->
+      Comp_eq (r <-$ generate_randomness eta (randomness_indices e);
+                 ret interp_fixed e eta adv r)
+              (r <-$ generate_randomness eta s;
+                 ret interp_fixed e eta adv r).
+  Proof.
+    intros t eta adv e s S.
+
+    (*
+  Lemma restrict_randomness :
+    forall {t} eta adv (e : expr t)
+           (r : PositiveMap.t (interp_type trand eta))
+           (s : PositiveSet.t),
+      PositiveSet.Subset (randomness_indices e) s ->
+      interp_fixed e eta adv r =
+      interp_fixed e eta adv
+                   (PositiveMapProperties.filter
+                      (fun k _ => PositiveSet.mem k s)
+                      r).
+*)
+
+
+
+    (* TODO *)
+  Admitted.
+
+  Lemma leb_negb : forall b1 b2,
+      Bool.leb b1 b2 ->
+      Bool.leb (negb b2) (negb b1).
+  Proof.
+    destruct b1; destruct b2; intuition.
+  Qed.
+
   Lemma whp_impl a b : impl a b -> whp a -> whp b.
   Proof.
-    cbv [whp indist universal_security_game interp]; intros.
-    cbn [interp_fixed] in H0 |- *.
-    repeat setoid_rewrite Bind_unused.
-    repeat setoid_rewrite <-Bind_assoc.
-    repeat setoid_rewrite Bind_Ret_l.
-    repeat setoid_rewrite Bind_unused in H0.
-    repeat setoid_rewrite <-Bind_assoc in H0.
-    repeat setoid_rewrite Bind_Ret_l in H0.
-    eapply negligible_le; try eapply (H0 adl adv dst).
+    repeat rewrite whp_whp_simple.
+    cbv [whp_simple whp_game impl always interp].
+    intros Himpl A adl adv.
+    cbn [interp_fixed] in Himpl.
+    assert (forall eta adv rands, inspect_vbool (interp_func fimpl (interp_pair (interp_fixed a eta adv rands) (interp_fixed b eta adv rands))) = inspect_vbool (vtrue eta)) as Himpl'.
+    {
+      intros; erewrite Himpl; reflexivity.
+    }
+    setoid_rewrite inspect_vtrue in Himpl'.
+    setoid_rewrite interp_fimpl in Himpl'.
+
+    eapply negligible_le; try eapply (A adl adv).
     cbv beta.
-    intro n.
-  Admitted.
+    intro eta.
+
+    set (u := PositiveSet.union (randomness_indices a) (randomness_indices b)).
+    assert (forall adv,
+               Comp_eq
+                 (rands <-$ generate_randomness eta (randomness_indices a);
+                  ret interp_fixed a eta adv rands)
+                 (rands <-$ generate_randomness eta u;
+                  ret interp_fixed a eta adv rands)) as E.
+    {
+      intro.
+      apply generate_more_randomness.
+      apply PositiveSetProperties.union_subset_1.
+    }
+    setoid_rewrite E; clear E.
+    assert (forall adv,
+               Comp_eq
+                 (rands <-$ generate_randomness eta (randomness_indices b);
+                  ret interp_fixed b eta adv rands)
+                 (rands <-$ generate_randomness eta u;
+                  ret interp_fixed b eta adv rands)) as E.
+    {
+      intro.
+      apply generate_more_randomness.
+      apply PositiveSetProperties.union_subset_2.
+    }
+    setoid_rewrite E; clear E.
+
+    rewrite Bind_assoc_in_Bind.
+    setoid_rewrite Bind_Ret_l.
+    rewrite Bind_assoc_in_Bind.
+    setoid_rewrite Bind_Ret_l.
+
+    rewrite Bind_assoc_2 with
+        (g := (fun e r => ret negb (inspect_vbool (interp_fixed b eta (adv eta e) r)))).
+    rewrite Bind_assoc_2 with
+        (g := (fun e r => ret negb (inspect_vbool (interp_fixed a eta (adv eta e) r)))).
+
+
+    eapply pr_weaken.
+    intros x _.
+    specialize (Himpl' eta (adv eta (fst x)) (snd x)).
+    eapply leb_negb.
+    eapply leb_implb.
+    eauto.
+  Qed.
 
   Lemma whp_and a b : whp a /\ whp b -> whp (expr_func fand (expr_pair a b)).
   Proof.
       cbv [indist universal_security_game whp interp]; intros.
       cbn [interp_fixed].
-      eapply Proper_negligible. 
+      eapply Proper_negligible.
       {
         intro eta.
         setoid_rewrite (case_tbool eta
@@ -501,7 +1036,7 @@ Section Language.
         cbv [andb].
         Lemma if_if (b t f:bool) {T} (x y:T) :
           (if (if b then t else f) then x else y)
-          = 
+          =
           (if b then (if t then x else y) else (if f then x else y)).
         Proof. destruct b, t, f; trivial. Qed.
         setoid_rewrite if_if.
@@ -516,7 +1051,7 @@ Section Language.
       cbv [Reflexive indist universal_security_game eqwhp whp interp]; intros.
       cbn [interp_fixed].
       (* TODO: report inlined setoid rewrite *)
-      eapply Proper_negligible. 
+      eapply Proper_negligible.
       {
         intro eta.
         setoid_rewrite interp_feqb.
@@ -533,7 +1068,7 @@ Section Language.
       cbv [Symmetric indist universal_security_game eqwhp whp interp]; intros.
       cbn [interp_fixed] in *.
       (* TODO: report inlined setoid rewrite *)
-      eapply Proper_negligible. 
+      eapply Proper_negligible.
       {
         intro eta.
 
@@ -543,7 +1078,7 @@ Section Language.
 
         cbn [randomness_indices].
         setoid_rewrite PositiveSetProperties.union_sym.
-        
+
         eapply reflexivity.
       }
       eapply H.
@@ -573,7 +1108,7 @@ Section Language.
         end
       | expr_adversarial ctx =>
         ctx <-$ interp_late ctx eta adv fixed_rand; ret (adv ctx)
-      | expr_func f x => 
+      | expr_func f x =>
         x <-$ interp_late x eta adv fixed_rand; ret (interp_func f x)
       | expr_pair a b =>
         common_rand <-$ generate_randomness eta (PositiveSet.inter (randomness_indices b) (randomness_indices a));
@@ -607,7 +1142,7 @@ Section Language.
             eapply reflexivity. } Unfocus.
           rewrite Bind_unused.
           rewrite H0; reflexivity. }
-        {  
+        {
           etransitivity.
           Focus 2. {
             apply Proper_Bind_generate_randomness.
@@ -635,11 +1170,11 @@ Section Language.
         repeat setoid_rewrite <-Bind_assoc.
         repeat setoid_rewrite Bind_Ret_l.
         reflexivity. }
-      { 
+      {
         match goal with H : _ |- _ =>
                         simpl randomness_indices in H;
                           apply subset_union in H; destruct H end.
-        
+
         setoid_rewrite IHe2; [|eassumption].
         setoid_rewrite IHe1; [|eassumption].
         repeat setoid_rewrite <-Bind_assoc.
@@ -663,7 +1198,7 @@ Section Language.
             match goal with H: PositiveMap.Equal _ _ |- _ => rewrite H end;
             reflexivity. } }
     Admitted.
-    
+
     Lemma interp_late_correct {t} (e:expr t) eta adv:
       Comp_eq
         (interp_late e eta adv (PositiveMap.empty _))

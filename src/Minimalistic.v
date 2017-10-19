@@ -798,7 +798,7 @@ Section Language.
         rewrite <- M in Heqp.
         rewrite F in Heqp.
         congruence.
-Qed.
+  Qed.
 
   Lemma restrict_randomness :
     forall {t} eta adv (e : expr t)
@@ -841,9 +841,6 @@ Qed.
       erewrite IHe2; eauto.
   Qed.
 
-  (* This lemma lets us avoid using canonicity of maps
-   * (since we don't actually have that)
-   *)
   Lemma lift_proper :
     forall {T1 T2 T3 : Set} {e3 : EqDec T3}
            (c : Comp T1) (R : T2 -> T2 -> Prop)
@@ -871,8 +868,21 @@ Qed.
   Proof.
     intros ? ? ? ? I ? ?.
     cbn [generate_randomness_single getSupport] in I.
-    
-  Admitted.
+    repeat
+      match goal with
+      | [ H : In _ (getUnique _ _) |- _ ] =>
+        eapply in_getUnique_if in H
+      | [ H : In _ (flatten _) |- _ ] =>
+        eapply in_flatten in H; destruct H as [? [? ?]]
+      | [ H : In _ (map _ _) |- _ ] =>
+        eapply in_map_iff in H; destruct H as [? [? ?]]; subst
+      | [ H : In m (_ :: nil) |- _ ] => destruct H as [? | []]; subst
+      | [ H : PositiveMap.In ?y (PositiveMap.add ?x ?e ?m) |- _ ] =>
+        let H' := fresh in
+        destruct (@PositiveMapProperties.F.add_in_iff _ m x y e) as [H' _];
+          specialize (H' H); clear H; destruct H'; eauto
+    end.
+  Qed.
 
   Lemma generate_randomness_support :
     forall eta s m,
@@ -906,17 +916,49 @@ Qed.
   Qed.
 
   Lemma restrict_irrelevant :
+    forall {T} (m : PositiveMap.t T) (f : PositiveMap.key -> T -> bool),
+      (forall x y, PositiveMap.MapsTo x y m -> f x y = true) ->
+      PositiveMap.Equal m (PositiveMapProperties.filter f m).
+    intros.
+    eapply PositiveMapProperties.F.Equal_mapsto_iff.
+    intros.
+    rewrite PositiveMapProperties.filter_iff; intuition.
+  Qed.
+
+  Lemma mapsto_in :
+    forall {T} (m : PositiveMap.t T) x y,
+      PositiveMap.MapsTo x y m -> PositiveMap.In x m.
+    intros.
+    cbv [PositiveMap.MapsTo] in *.
+    eapply PositiveMapFacts.in_find_iff.
+    congruence.
+  Qed.
+
+  Lemma restrict_to_superset :
     forall {T} (m : PositiveMap.t T) s,
       (forall x, PositiveMap.In x m -> PositiveSet.In x s) ->
       PositiveMap.Equal m (PositiveMapProperties.filter
                              (fun k _  =>
                                 PositiveSet.mem k s) m).
-  Admitted.
+    intros.
+    eapply restrict_irrelevant.
+    intros.
+    apply PositiveSetProperties.Dec.F.mem_1.
+    eauto using mapsto_in.
+  Qed.
 
-  Lemma interp_fixed_proper :
+  (* TODO We can use a canonical representation of maps,
+   * so there's no point in reasoning about PositiveMap.Equal.
+   *)
+
+  Lemma interp_fixed_Proper :
     forall {t} (e : expr t) eta adv,
     Proper (PositiveMap.Equal ==> eq) (interp_fixed e eta adv).
-  Admitted.
+  Proof.
+    intros ? e ? ? ? ? ?; induction e;
+      cbn [interp_fixed]; try congruence.
+    rewrite PositiveMapProperties.F.find_m_Proper; eauto.
+  Qed.
 
   Lemma generate_more_randomness :
     forall {t} eta adv (e : expr t) (s : PositiveSet.t),
@@ -925,25 +967,6 @@ Qed.
                  ret interp_fixed e eta adv r)
               (r <-$ generate_randomness eta s;
                  ret interp_fixed e eta adv r).
-  Proof.
-    intros t eta adv e s S.
-
-    (*
-  Lemma restrict_randomness :
-    forall {t} eta adv (e : expr t)
-           (r : PositiveMap.t (interp_type trand eta))
-           (s : PositiveSet.t),
-      PositiveSet.Subset (randomness_indices e) s ->
-      interp_fixed e eta adv r =
-      interp_fixed e eta adv
-                   (PositiveMapProperties.filter
-                      (fun k _ => PositiveSet.mem k s)
-                      r).
-*)
-
-
-
-    (* TODO *)
   Admitted.
 
   Lemma leb_negb : forall b1 b2,
@@ -959,7 +982,12 @@ Qed.
     cbv [whp_simple whp_game impl always interp].
     intros Himpl A adl adv.
     cbn [interp_fixed] in Himpl.
-    assert (forall eta adv rands, inspect_vbool (interp_func fimpl (interp_pair (interp_fixed a eta adv rands) (interp_fixed b eta adv rands))) = inspect_vbool (vtrue eta)) as Himpl'.
+    assert (forall eta adv rands,
+               inspect_vbool
+                 (interp_func fimpl
+                              (interp_pair (interp_fixed a eta adv rands)
+                                           (interp_fixed b eta adv rands))) =
+               inspect_vbool (vtrue eta)) as Himpl'.
     {
       intros; erewrite Himpl; reflexivity.
     }
@@ -1002,10 +1030,11 @@ Qed.
     setoid_rewrite Bind_Ret_l.
 
     rewrite Bind_assoc_2 with
-        (g := (fun e r => ret negb (inspect_vbool (interp_fixed b eta (adv eta e) r)))).
+        (g := (fun e r =>
+                 ret negb (inspect_vbool (interp_fixed b eta (adv eta e) r)))).
     rewrite Bind_assoc_2 with
-        (g := (fun e r => ret negb (inspect_vbool (interp_fixed a eta (adv eta e) r)))).
-
+        (g := (fun e r =>
+                 ret negb (inspect_vbool (interp_fixed a eta (adv eta e) r)))).
 
     eapply pr_weaken.
     intros x _.

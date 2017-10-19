@@ -1046,30 +1046,11 @@ Section Language.
 
   Lemma whp_and a b : whp a /\ whp b -> whp (expr_func fand (expr_pair a b)).
   Proof.
-      cbv [indist universal_security_game whp interp]; intros.
-      cbn [interp_fixed].
-      eapply Proper_negligible.
-      {
-        intro eta.
-        setoid_rewrite (case_tbool eta
-                          (interp_func fand
-                                       (interp_pair (interp_fixed a eta (adv eta _) _)
-                                                    (interp_fixed b eta (adv eta _) _)))).
-        setoid_rewrite interp_fand.
-        repeat setoid_rewrite Bind_unused.
-        repeat setoid_rewrite <-Bind_assoc.
-        repeat setoid_rewrite Bind_Ret_l.
-        repeat setoid_rewrite <-Bind_assoc in H.
-        repeat setoid_rewrite Bind_Ret_l in H.
-        destruct H as [Ha Hb].
-        cbv [andb].
-        Lemma if_if (b t f:bool) {T} (x y:T) :
-          (if (if b then t else f) then x else y)
-          =
-          (if b then (if t then x else y) else (if f then x else y)).
-        Proof. destruct b, t, f; trivial. Qed.
-        setoid_rewrite if_if.
-        setoid_rewrite <-case_tbool.
+    SearchAbout whp iff.
+    rewrite 3whp_whp_simple.
+    cbv [whp_simple whp_game interp] in *.
+    setoid_rewrite <-Bind_assoc.
+    intros [A B].
   Admitted.
 
   Section Equality.
@@ -1113,8 +1094,26 @@ Section Language.
       eapply H.
     Qed.
 
-    Global Instance Transitive_eqwhp {t} : Transitive (@eqwhp t). Admitted.
-
+    Global Instance Transitive_eqwhp {t} : Transitive (@eqwhp t).
+    Proof.
+      cbv [Transitive eqwhp]; intros ??? A B.
+      refine (whp_impl _ _ _ (whp_and _ _ (conj A B))).
+      cbv [impl always]; intros; cbn.
+      etransitivity; [eapply case_tbool|].
+      repeat match goal with
+             | _ => solve [trivial]
+             | _ => setoid_rewrite interp_fimpl
+             | _ => setoid_rewrite interp_fand
+             | _ => setoid_rewrite interp_feqb
+             | _ => setoid_rewrite inspect_vtrue
+             | _ => setoid_rewrite inspect_vfalse
+             | |- context [if ?a ?= ?b then _ else _] => destruct (a ?= b) eqn:?
+             | H:_|-_ => rewrite eqb_leibniz in H; rewrite H in *; clear H
+             | H:_|-_ => rewrite eqb_refl in H; discriminate H
+             | _ => progress cbn
+             end.
+    Qed.
+      
     Global Instance Proper_eqwhp_pair {t1 t2} : Proper (eqwhp ==> eqwhp ==> eqwhp) (@expr_pair t1 t2).
     Admitted.
 

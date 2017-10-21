@@ -716,38 +716,6 @@ Section Language.
     reflexivity.
   Qed.
 
-  Lemma Bind_assoc_pure :
-    forall {T1 T2 T3 : Set} {e2 : EqDec T2} {e3 : EqDec T3}
-           (cA : Comp T1) (f : T2 -> T3) (g : T1 -> T2),
-    Comp_eq (x <-$ cA;
-               ret f (g x))
-            (y <-$ (x <-$ cA;
-                      ret g x);
-               ret f y).
-  Proof.
-    intros.
-    rewrite <- Bind_assoc.
-    setoid_rewrite Bind_Ret_l.
-    reflexivity.
-  Qed.
-
-  Definition comp_prod {A : Set} {B : Set} {e : EqDec (A * B)}
-             (c1 : Comp A) (c2 : Comp B) :=
-    (x1 <-$ c1; x2 <-$ c2; ret (x1, x2)).
-
-  Lemma Comp_eq_prod :
-    forall {A B : Set} {e : EqDec (A * B)}
-           (cA1 cA2 : Comp A) (cB1 cB2 : Comp B),
-      Comp_eq cA1 cA2 -> Comp_eq cB1 cB2 ->
-      Comp_eq (comp_prod cA1 cB1) (comp_prod cA2 cB2).
-  Proof.
-    intros ? ? ? ? ? ? ? H1 H2.
-    cbv [comp_prod].
-    setoid_rewrite H1.
-    setoid_rewrite H2.
-    reflexivity.
-  Qed.
-
   Lemma find_trivial_filter :
     forall {T} (m : PositiveMap.t T)
            (s : PositiveSet.t)
@@ -800,7 +768,7 @@ Section Language.
         congruence.
   Qed.
 
-  Lemma restrict_randomness :
+  Lemma interp_less_randomness :
     forall {t} eta adv (e : expr t)
            (r : PositiveMap.t (interp_type trand eta))
            (s : PositiveSet.t),
@@ -839,23 +807,6 @@ Section Language.
       edestruct subset_union; eauto.
       erewrite IHe1; eauto.
       erewrite IHe2; eauto.
-  Qed.
-
-  Lemma lift_proper :
-    forall {T1 T2 T3 : Set} {e3 : EqDec T3}
-           (c : Comp T1) (R : T2 -> T2 -> Prop)
-           (g1 g2 : T1 -> T2) (f : T2 -> T3),
-    (forall x, In x (getSupport c) -> R (g1 x) (g2 x)) ->
-    Proper (R ==> eq) f ->
-    Comp_eq (x <-$ c; ret f (g1 x)) (x <-$ c; ret f (g2 x)).
-  Proof.
-    intros ? ? ? ? ? ? ? ? ? Rg Pf.
-    cbv [Comp_eq image_relation pointwise_relation].
-    cbn [evalDist].
-    intros.
-    eapply sumList_body_eq.
-    intros x ?.
-    assert (f (g1 x) = f (g2 x)) as E by eauto; rewrite E; reflexivity.
   Qed.
 
   Lemma generate_randomness_single_support :
@@ -934,30 +885,162 @@ Section Language.
     congruence.
   Qed.
 
-  Lemma restrict_to_superset :
-    forall {T} (m : PositiveMap.t T) s,
-      (forall x, PositiveMap.In x m -> PositiveSet.In x s) ->
-      PositiveMap.Equal m (PositiveMapProperties.filter
-                             (fun k _  =>
-                                PositiveSet.mem k s) m).
-    intros.
-    eapply restrict_irrelevant.
-    intros.
-    apply PositiveSetProperties.Dec.F.mem_1.
-    eauto using mapsto_in.
+  Lemma generate_empty :
+    forall eta s,
+      PositiveSet.Empty s ->
+      Comp_eq (generate_randomness eta s)
+              (ret PositiveMap.empty (interp_type trand eta)).
+  Proof.
+    intros; eapply PositiveSetProperties.fold_1; intuition.
   Qed.
 
-  (* TODO We can use a canonical representation of maps,
-   * so there's no point in reasoning about PositiveMap.Equal.
-   *)
+  (* TODO Need a canonical map *)
+  Axiom positive_map_equal_eq : forall {T} (m m' : PositiveMap.t T),
+      PositiveMap.Equal m m' -> m = m'.
 
-  Lemma interp_fixed_Proper :
-    forall {t} (e : expr t) eta adv,
-    Proper (PositiveMap.Equal ==> eq) (interp_fixed e eta adv).
+  Lemma filter_empty :
+    forall {T} f,
+      PositiveMapProperties.filter f (PositiveMap.empty T) =
+      PositiveMap.empty T.
   Proof.
-    intros ? e ? ? ? ? ?; induction e;
-      cbn [interp_fixed]; try congruence.
-    rewrite PositiveMapProperties.F.find_m_Proper; eauto.
+    intros T f.
+    eapply positive_map_equal_eq.
+    eapply PositiveMapProperties.F.Equal_mapsto_iff.
+    intros k e.
+    rewrite PositiveMapProperties.filter_iff; intuition.
+    exfalso; eapply PositiveMapProperties.F.empty_mapsto_iff; eauto.
+  Qed.
+
+  Lemma filter_add :
+    forall {T} (m : PositiveMap.t T) f x y,
+      PositiveMapProperties.filter f (PositiveMap.add x y m) =
+      let fm := PositiveMapProperties.filter f m in
+      match f x y with
+      | true => PositiveMap.add x y fm
+      | false => PositiveMap.remove x fm
+      end.
+  Proof.
+    intros ? ? f x y.
+    remember (f x y) as b.
+    destruct b;
+      eapply positive_map_equal_eq;
+      eapply PositiveMapProperties.F.Equal_mapsto_iff; intros;
+        repeat rewrite PositiveMapProperties.filter_iff;
+        repeat rewrite PositiveMapProperties.F.add_mapsto_iff;
+        repeat rewrite PositiveMapProperties.F.remove_mapsto_iff;
+        repeat rewrite PositiveMapProperties.filter_iff;
+        intuition; congruence.
+  Qed.
+
+  Lemma remove_notin : forall {T} x (s : PositiveMap.t T),
+      ~PositiveMap.In x s ->
+      PositiveMap.remove x s = s.
+  Proof.
+    intros.
+    eapply positive_map_equal_eq.
+    eapply PositiveMapProperties.F.Equal_mapsto_iff; intros.
+    rewrite PositiveMapProperties.F.remove_mapsto_iff.
+    intuition.
+    subst; eauto using mapsto_in.
+  Qed.
+
+  Lemma remove_randomness eta x s :
+    ~PositiveSet.In x s ->
+    Comp_eq (generate_randomness eta s)
+            (r <-$ generate_randomness eta s;
+               ret PositiveMap.remove x r).
+    intros.
+    rewrite <- Bind_Ret_r with (cA := generate_randomness eta s) at 1.
+    cbv [Comp_eq image_relation pointwise_relation].
+    cbn [evalDist].
+    intros.
+    eapply sumList_body_eq.
+    intros r I.
+    assert (PositiveMap.remove x r = r) as E.
+    {
+      eapply remove_notin; eauto.
+      intro.
+      eauto using generate_randomness_support.
+    }
+    rewrite E; clear E.
+
+    reflexivity.
+  Qed.
+
+  Lemma restrict_randomness :
+    forall eta s mask,
+      (Comp_eq (generate_randomness eta (PositiveSet.inter s mask))
+               (r <-$ (generate_randomness eta s);
+                  ret PositiveMapProperties.filter
+                      (fun k _ =>
+                         PositiveSet.mem k mask) r)).
+  Proof.
+    intros eta s.
+    pattern s.
+    eapply PositiveSetProperties.set_induction; clear s.
+    - intros.
+      repeat rewrite generate_empty;
+        eauto using PositiveSetProperties.empty_inter_1.
+      rewrite Bind_Ret_l.
+      rewrite filter_empty.
+      reflexivity.
+    - intros s s' IHs x nI A mask.
+      rewrite add_generate_randomness; eauto.
+      setoid_rewrite filter_add.
+      assert (forall a,
+                 Comp_eq
+                   (r <-$ generate_randomness eta s;
+                    ret (let fm :=
+                             PositiveMapProperties.filter
+                               (fun k _ => PositiveSet.mem k mask) r in
+                         if PositiveSet.mem x mask
+                         then PositiveMap.add x (cast_rand eta a) fm
+                         else PositiveMap.remove x fm))
+                   (fm <-$ (r <-$ generate_randomness eta s;
+                            ret PositiveMapProperties.filter
+                                (fun k _ => PositiveSet.mem k mask) r);
+                    ret if PositiveSet.mem x mask
+                        then PositiveMap.add x (cast_rand eta a) fm
+                        else PositiveMap.remove x fm)) as E.
+      {
+        intros.
+        rewrite <- Bind_assoc.
+        setoid_rewrite Bind_Ret_l.
+        reflexivity.
+      }
+      setoid_rewrite E; clear E.
+      setoid_rewrite <- IHs.
+      remember (PositiveSet.mem x mask) as b.
+      destruct b.
+      + rewrite <- Bind_Ret_r with
+            (cA := generate_randomness eta (PositiveSet.inter s' mask)).
+        eapply add_generate_randomness;
+          eauto using PositiveSetProperties.Dec.F.inter_1.
+        eapply PositiveSetProperties.inter_Add; eauto.
+        eapply PositiveSetProperties.Dec.F.mem_iff; eauto.
+      + rewrite Bind_unused.
+        rewrite <- remove_randomness.
+        * rewrite PositiveSetProperties.inter_Add_2 with
+              (s := s) (s' := s') (s'' := mask) (x := x); eauto.
+          -- reflexivity.
+          -- eapply PositiveSetProperties.Dec.F.not_mem_iff; congruence.
+        * eauto using PositiveSetProperties.Dec.F.inter_1.
+  Qed.
+
+  Corollary restrict_randomness_subset :
+    forall eta s s',
+      PositiveSet.Subset s s' ->
+      (Comp_eq (generate_randomness eta s)
+               (r <-$ (generate_randomness eta s');
+                  ret PositiveMapProperties.filter
+                      (fun k _ =>
+                         PositiveSet.mem k s) r)).
+  Proof.
+    intros.
+    rewrite <- PositiveSetProperties.inter_subset_equal with
+        (s := s) (s' := s'); eauto.
+    rewrite PositiveSetProperties.inter_sym.
+    eapply restrict_randomness.
   Qed.
 
   Lemma generate_more_randomness :
@@ -967,7 +1050,31 @@ Section Language.
                  ret interp_fixed e eta adv r)
               (r <-$ generate_randomness eta s;
                  ret interp_fixed e eta adv r).
-  Admitted.
+    intros.
+    assert (forall r,
+               Comp_eq
+                 (ret interp_fixed e eta adv r)
+                 (ret interp_fixed e eta adv
+                      (PositiveMapProperties.filter
+                         (fun k _ =>
+                            PositiveSet.mem k (randomness_indices e)) r)))
+      as E.
+    {
+      intro r.
+      erewrite interp_less_randomness.
+      - reflexivity.
+      - reflexivity.
+    }
+    setoid_rewrite E at 2; clear E.
+
+    setoid_rewrite <- Bind_Ret_l with
+        (f := fun r => ret interp_fixed e eta adv r) at 2.
+
+    rewrite Bind_assoc.
+
+    rewrite <- restrict_randomness_subset; eauto.
+    reflexivity.
+  Qed.
 
   Lemma leb_negb : forall b1 b2,
       Bool.leb b1 b2 ->

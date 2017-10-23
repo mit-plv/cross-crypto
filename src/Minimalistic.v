@@ -1098,6 +1098,7 @@ Section Language.
     {
       intros; erewrite Himpl; reflexivity.
     }
+    clear Himpl.
     setoid_rewrite inspect_vtrue in Himpl'.
     setoid_rewrite interp_fimpl in Himpl'.
 
@@ -1151,14 +1152,178 @@ Section Language.
     eauto.
   Qed.
 
+  Lemma inspect_vbool_inj : forall eta (x y : interp_type tbool eta),
+      inspect_vbool x = inspect_vbool y -> x = y.
+  Proof.
+    intros ? x; pattern x; eapply tbool_rect; clear x;
+      intro y; pattern y; eapply tbool_rect; clear y;
+        repeat rewrite inspect_vfalse; repeat rewrite inspect_vtrue;
+          intros; congruence.
+  Qed.
+
+  Corollary whp_or_inl a b : whp a -> whp (expr_func f_or (expr_pair a b)).
+  Proof.
+    intros.
+    eapply whp_impl; eauto.
+    cbv [impl always].
+    intros eta adv rands.
+    cbn [interp_fixed].
+    eapply inspect_vbool_inj.
+    rewrite interp_fimpl.
+    rewrite interp_f_or.
+    rewrite inspect_vtrue.
+    destruct (inspect_vbool (interp_fixed a eta adv rands));
+      reflexivity.
+  Qed.
+
+  Corollary whp_or_inr a b : whp b -> whp (expr_func f_or (expr_pair a b)).
+  Proof.
+    intros.
+    eapply whp_impl; eauto.
+    cbv [impl always].
+    intros eta adv rands.
+    cbn [interp_fixed].
+    eapply inspect_vbool_inj.
+    rewrite interp_fimpl.
+    rewrite interp_f_or.
+    rewrite inspect_vtrue.
+    destruct (inspect_vbool (interp_fixed a eta adv rands));
+      destruct (inspect_vbool (interp_fixed b eta adv rands));
+      reflexivity.
+  Qed.
+
   Lemma whp_and a b : whp a /\ whp b -> whp (expr_func fand (expr_pair a b)).
   Proof.
-    SearchAbout whp iff.
-    rewrite 3whp_whp_simple.
-    cbv [whp_simple whp_game interp] in *.
+    rewrite 3 whp_whp_simple.
+    cbv [whp_simple whp_game interp].
     setoid_rewrite <-Bind_assoc.
+    setoid_rewrite Bind_Ret_l.
     intros [A B].
-  Admitted.
+    intros adl adv.
+    setoid_rewrite interp_fand.
+    fold (@interp_fixed tbool).
+    eapply negligible_le with
+        (f1 :=
+           (fun eta =>
+              Pr [evil_rands <-$ generate_randomness eta (adl eta);
+                  x <-$
+                    generate_randomness eta
+                    (randomness_indices (expr_func fand (expr_pair a b)));
+                  ret negb
+                      (inspect_vbool
+                         (interp_fixed a eta (adv eta evil_rands) x))]
+              +
+              Pr [evil_rands <-$ generate_randomness eta (adl eta);
+                  x <-$
+                    generate_randomness eta
+                    (randomness_indices (expr_func fand (expr_pair a b)));
+                  ret negb
+                      (inspect_vbool
+                         (interp_fixed b eta (adv eta evil_rands) x))])).
+    - intro eta.
+      set (E := generate_randomness eta (adl eta)).
+      set (R := generate_randomness eta
+                                    (randomness_indices
+                                       (expr_func fand (expr_pair a b)))).
+      set (I := fun e er r =>
+                  inspect_vbool (interp_fixed e eta (adv eta er) r)).
+
+      assert
+        (Comp_eq
+           (er <-$ E;
+            r <-$ R;
+            ret negb
+                (I a er r && I b er r))
+           (xy <-$ (er <-$ E;
+                    r <-$ R;
+                    ret (I a er r, I b er r));
+            ret negb (fst xy && snd xy))) as E0.
+      {
+        repeat setoid_rewrite <- Bind_assoc.
+        setoid_rewrite Bind_Ret_l.
+        cbv [fst snd].
+        reflexivity.
+      }
+      cbv [I] in E0; rewrite E0; clear E0.
+
+      setoid_rewrite negb_andb.
+
+      assert (Comp_eq
+                (er <-$ E;
+                 r <-$ R;
+                 ret negb (I a er r))
+                (xy <-$ (er <-$ E;
+                         r <-$ R;
+                         ret (I a er r, I b er r));
+                 ret negb (fst xy))) as E0.
+      {
+        repeat setoid_rewrite <- Bind_assoc.
+        setoid_rewrite Bind_Ret_l.
+        cbv [fst snd].
+        reflexivity.
+      }
+      cbv [I] in E0; rewrite E0; clear E0.
+
+      assert (Comp_eq
+                (er <-$ E;
+                 r <-$ R;
+                 ret negb (I b er r))
+                (xy <-$ (er <-$ E;
+                         r <-$ R;
+                         ret (I a er r, I b er r));
+                 ret negb (snd xy))) as E0.
+      {
+        repeat setoid_rewrite <- Bind_assoc.
+        setoid_rewrite Bind_Ret_l.
+        cbv [fst snd].
+        reflexivity.
+      }
+      cbv [I] in E0; rewrite E0; clear E0.
+
+      eapply evalDist_orb_le.
+    - cbn [randomness_indices].
+      set (u := PositiveSet.union
+                  (randomness_indices a) (randomness_indices b)).
+      eapply negligible_plus.
+      + assert (forall eta er,
+                   Comp_eq
+                     (r <-$ generate_randomness eta u;
+                      ret negb (inspect_vbool
+                                  (interp_fixed a eta (adv eta er) r)))
+                     (r <-$ generate_randomness eta (randomness_indices a);
+                      ret negb (inspect_vbool
+                                  (interp_fixed a eta (adv eta er) r)))) as E.
+        {
+          intros.
+          setoid_rewrite <- Bind_Ret_l with
+              (f := fun b => ret negb (inspect_vbool b)).
+          rewrite 2 Bind_assoc.
+          rewrite generate_more_randomness.
+          - reflexivity.
+          - eapply PositiveSetProperties.union_subset_1.
+        }
+        setoid_rewrite E; clear E.
+        eauto.
+      + assert (forall eta er,
+                   Comp_eq
+                     (r <-$ generate_randomness eta u;
+                      ret negb (inspect_vbool
+                                  (interp_fixed b eta (adv eta er) r)))
+                     (r <-$ generate_randomness eta (randomness_indices b);
+                      ret negb (inspect_vbool
+                                  (interp_fixed b eta (adv eta er) r)))) as E.
+        {
+          intros.
+          setoid_rewrite <- Bind_Ret_l with
+              (f := fun b => ret negb (inspect_vbool b)).
+          rewrite 2 Bind_assoc.
+          rewrite generate_more_randomness.
+          - reflexivity.
+          - eapply PositiveSetProperties.union_subset_2.
+        }
+        setoid_rewrite E; clear E.
+        eauto.
+  Qed.
 
   Section Equality.
     Definition eqwhp {t} (e1 e2:expr t) : Prop := whp (expr_func feqb (expr_pair e1 e2)).

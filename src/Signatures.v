@@ -4,11 +4,12 @@ Import BinPos.
 
 Section Safety.
   Context {type : Set} {interp_type : type -> nat -> Set}
-          {trand tmessage tkey : type} {tlist : type -> type}
+          {trand tmessage tskey tpkey : type} {tlist : type -> type}
           {tprod : type -> type -> type}
           {func : type -> type -> Set}
-          {keygen : func trand tkey}
-          {sign : func (tprod tmessage tkey) tmessage}. 
+          {skeygen : func trand tskey} (* secret key generation (from randomness) *)
+          {pkeygen : func tskey tpkey}  (* public key generation (from secret key) *)
+          {sign : func (tprod tmessage tskey) tmessage}. 
   Let expr :=
     @expr type interp_type trand tmessage tlist tprod func.
 
@@ -24,9 +25,17 @@ Section Safety.
                 signature_safe sk (expr_random i) (fun m => False)
   | sadv : forall e s, signature_safe sk e s ->
                        signature_safe sk (expr_adversarial e) s
+  | spkeygen :
+        signature_safe sk
+                       (expr_func pkeygen (expr_func skeygen (expr_random sk)))
+                       (fun m => False)
   | ssign :
-      forall m,
-        signature_safe sk (expr_func sign (expr_pair m (expr_func keygen (expr_random sk)))) (fun m' => tmessage_eq m m')
+      forall m s,
+        signature_safe sk m s -> 
+        signature_safe sk
+                       (expr_func sign
+                                  (expr_pair m (expr_func skeygen (expr_random sk))))
+                       (fun m' => tmessage_eq m m' \/ s m')
   | sfunc : forall {t1 t2} (f : func t1 t2) e s,
       signature_safe sk e s ->
       signature_safe sk (expr_func f e) s

@@ -4,14 +4,14 @@ Import BinPos.
 
 Section Safety.
   Context {type : Set} {interp_type : type -> nat -> Set}
-          {trand tmessage tskey tpkey tbool : type} {tlist : type -> type}
+          {trand tmessage tsignature tskey tpkey tbool : type}
           {tprod : type -> type -> type}
           {func : type -> type -> Set}.
   Context {skeygen : func trand tskey} (* secret key generation (from randomness) *)
           {pkeygen : func tskey tpkey}  (* public key generation (from secret key) *)
-          {sign : func (tprod tmessage tskey) tmessage}.
+          {sign : func (tprod tmessage tskey) tsignature}.
   Let expr :=
-    @expr type interp_type trand tmessage tlist tprod func.
+    @expr type interp_type trand tmessage tprod func.
 
   Inductive signature_safe (sk : positive) :
     forall {t}, expr t -> list (expr tmessage) -> Prop :=
@@ -28,7 +28,7 @@ Section Safety.
                        nil
   | ssign :
       forall m s,
-        signature_safe sk m s -> 
+        signature_safe sk m s ->
         signature_safe sk
                        (expr_func sign
                                   (expr_pair m (expr_func skeygen (expr_random sk))))
@@ -60,33 +60,26 @@ Section Safety.
           {interp_expr : forall t eta, expr t -> interp_type t eta}.
   Let indist :=
     @indist type eq_dec interp_type eq_dec_interp_type
-            tbool trand tmessage tlist tprod func
+            tbool trand tmessage tprod func
             cast_rand interp_func interp_pair.
 
-  Context {tcons : forall t, func (tprod (tlist t) t) (tlist t) }.
-  Context {tnil : forall t, expr (tlist t) }.
-  Fixpoint adv_knowledge msgs : expr (tlist tmessage) :=
-    match msgs with
-    | nil => tnil _
-    | cons m msgs' =>
-      expr_func (tcons _)
-                (expr_pair (adv_knowledge msgs') m)
-    end.
+
+  (* todo move all this into Minimalistic *)
+
+  (* todo make this a fold-right *)
+  Definition expr_in {t : type} (x : expr t) (S : list (expr t)) : expr tbool.
+  Admitted.
 
   Context {tand : func (tprod tbool tbool) tbool}.
-  Context {tin : forall t, func (tprod (tlist t) t) tbool}.
-  Lemma signature_safe_conclusion (sk : positive) {t} (e : expr t) S
-    (verify : func tmessage tbool) :
-    signature_safe sk e S ->
-    forall (adv : expr (tlist tmessage) -> expr tmessage),
-      let x := adv (adv_knowledge S) in
-      indist tbool
-             (expr_func verify x)
-             (expr_func tand
-                        (expr_pair
-                           (expr_func verify x)
-                           (expr_func (tin _) (expr_pair (adv_knowledge S) x)))).
-  Proof.
-  Admitted.
+  Definition signature_safe_conclusion (sk : positive) {t} (m : expr tmessage) (s : expr tsignature) S
+    (verify : func (tprod tpkey (tprod tmessage tsignature)) tbool) :=
+    signature_safe sk s S ->
+    (* It's okay if the key was leaked at the time we got the message,
+       just not the signature; hence no "signature_safe" for m. *)
+    let ve := (expr_func verify (expr_pair (expr_func pkeygen (expr_func skeygen (expr_random sk)))
+                                           (expr_pair m s))) in
+    eqwhp ve
+          (expr_func tand (expr_pair ve
+                                     (expr_in m S))).
 
 End Safety.

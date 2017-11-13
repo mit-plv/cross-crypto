@@ -1632,6 +1632,13 @@ End WHP.
     eapply negligible_0.
   Qed.
 
+  Definition expr_in {t} (x : expr t) (S : list (expr t)) : expr tbool :=
+    fold_right (fun (m : expr t) (acc : expr tbool) =>
+                  expr_func f_or (expr_pair
+                                    (expr_func feqb (expr_pair x m))
+                                    acc))
+               (expr_const vfalse) S.
+
   Section Signature.
     Context {tsignature tskey tpkey : type}.
     Context {skeygen : func trand tskey} (* secret key generation  *)
@@ -1640,19 +1647,19 @@ End WHP.
 
     Inductive signature_safe (sk : positive) :
       forall {t}, expr t -> list (expr tmessage) -> Prop :=
-    | sconst : forall t eta,
-        @signature_safe sk t (expr_const eta) nil
-    | srand_neq :
+    | ssconst : forall t v,
+        @signature_safe sk t (expr_const v) nil
+    | ssrand_neq :
         forall i, i <> sk ->
                   signature_safe sk (expr_random i) nil
-    | sadv : forall e S, signature_safe sk e S ->
+    | ssadv : forall e S, signature_safe sk e S ->
                          signature_safe sk (expr_adversarial e) S
-    | spkeygen :
+    | sspkeygen :
         signature_safe sk
                        (expr_func pkeygen
                                   (expr_func skeygen (expr_random sk)))
                        nil
-    | ssign :
+    | sssign :
         forall m S,
           signature_safe sk m S ->
           signature_safe
@@ -1660,21 +1667,14 @@ End WHP.
             (expr_func sign (expr_pair m
                                        (expr_func skeygen (expr_random sk))))
             (m :: S)
-    | sfunc : forall {t1 t2} (f : func t1 t2) e S,
+    | ssfunc : forall {t1 t2} (f : func t1 t2) e S,
         signature_safe sk e S ->
         signature_safe sk (expr_func f e) S
-    | spair : forall {t1 t2} (e1: expr t1) (e2: expr t2) S1 S2,
+    | sspair : forall {t1 t2} (e1: expr t1) (e2: expr t2) S1 S2,
         signature_safe sk e1 S1 ->
         signature_safe sk e2 S2 ->
         signature_safe sk (expr_pair e1 e2) (S1 ++ S2)
     .
-
-    Definition expr_in {t} (x : expr t) (S : list (expr t)) : expr tbool :=
-      fold_right (fun (m : expr t) (acc : expr tbool) =>
-                    expr_func f_or (expr_pair
-                                      (expr_func feqb (expr_pair x m))
-                                      acc))
-                 (expr_const vfalse) S.
 
     Definition signature_safe_conclusion (sk : positive)
                (m : expr tmessage) (s : expr tsignature)
@@ -1684,11 +1684,96 @@ End WHP.
         signature_safe sk s S ->
         (* It's okay if the key was leaked at the time we got the message,
            just not the signature; hence no "signature_safe" for m. *)
-        let ve := (expr_func verify (expr_pair (expr_func pkeygen (expr_func skeygen (expr_random sk)))
-                                               (expr_pair m s))) in
+        let ve := expr_func verify (expr_pair (expr_func pkeygen (expr_func skeygen (expr_random sk)))
+                                              (expr_pair m s)) in
         eqwhp ve
               (expr_func fand (expr_pair ve
                                          (expr_in m S))).
   End Signature.
+
+  Section MAC.
+    Context {tmac tskey : type}.
+    Context {skeygen : func trand tskey} (* secret key generation  *)
+            {mac : func (tprod tmessage tskey) tmac}
+            {verify : func (tprod tskey (tprod tmessage tmac)) tbool}.
+
+    Inductive mac_safe (sk : positive) :
+      forall {t}, expr t -> list (expr tmessage) -> Prop :=
+    | msconst : forall t v,
+        @mac_safe sk t (expr_const v) nil
+    | msrand_neq :
+        forall i, i <> sk ->
+                  mac_safe sk (expr_random i) nil
+    | msadv : forall e S, mac_safe sk e S ->
+                          mac_safe sk (expr_adversarial e) S
+    | msmac :
+        forall m S,
+          mac_safe sk m S ->
+          mac_safe
+            sk
+            (expr_func mac (expr_pair m
+                                      (expr_func skeygen (expr_random sk))))
+            (m :: S)
+    | msfunc : forall {t1 t2} (f : func t1 t2) e S,
+        mac_safe sk e S ->
+        mac_safe sk (expr_func f e) S
+    | mspair : forall {t1 t2} (e1: expr t1) (e2: expr t2) S1 S2,
+        mac_safe sk e1 S1 ->
+        mac_safe sk e2 S2 ->
+        mac_safe sk (expr_pair e1 e2) (S1 ++ S2)
+    | msverify : forall m s,
+        mac_safe sk (expr_func verify
+                            (expr_pair
+                               (expr_func skeygen (expr_random sk))
+                               (expr_pair m s)))
+                 nil
+    .
+
+    Definition mac_safe_conclusion (sk : positive)
+               (m : expr tmessage) (s : expr tmac) :=
+      forall S : list (expr tmessage),
+        mac_safe sk s S ->
+        let ve := expr_func verify (expr_pair (expr_func skeygen (expr_random sk))
+                                              (expr_pair m s)) in
+        eqwhp ve
+              (expr_func fand (expr_pair ve
+                                         (expr_in m S))).
+  End MAC.
+
+  (* TODO Do we need nonces for encryption?
+          What about signatures/MACs? *)
+
+  Section Encrypt.
+    Context {tmac tkey : type}.
+    Context {skeygen : func trand tkey}
+            {encrypt : func (tprod tmessage tkey) tmessage}.
+
+    Inductive encrypt_safe (sk : positive) :
+      forall {t}, expr t -> Prop :=
+    | esconst : forall t v,
+        @encrypt_safe sk t (expr_const v)
+    | esrand_neq :
+        forall i, i <> sk ->
+                  encrypt_safe sk (expr_random i)
+    | esadv : forall e, encrypt_safe sk e ->
+                        encrypt_safe sk (expr_adversarial e)
+    | esencrypt : forall m,
+        encrypt_safe sk m -> (* No key cycles *)
+        encrypt_safe
+          sk
+          (expr_func encrypt
+                     (expr_pair m (expr_func skeygen (expr_random sk))))
+    | esfunc : forall {t1 t2} (f : func t1 t2) e,
+        encrypt_safe sk e ->
+        encrypt_safe sk (expr_func f e)
+    | espair : forall {t1 t2} (e1: expr t1) (e2: expr t2),
+        encrypt_safe sk e1 ->
+        encrypt_safe sk e2 ->
+        encrypt_safe sk (expr_pair e1 e2)
+    .
+
+    (* TODO encryption conclusion *)
+
+  End Encrypt.
 
 End Language.

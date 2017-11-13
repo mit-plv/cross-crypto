@@ -1632,4 +1632,63 @@ End WHP.
     eapply negligible_0.
   Qed.
 
+  Section Signature.
+    Context {tsignature tskey tpkey : type}.
+    Context {skeygen : func trand tskey} (* secret key generation  *)
+            {pkeygen : func tskey tpkey} (* public part of key *)
+            {sign : func (tprod tmessage tskey) tsignature}.
+
+    Inductive signature_safe (sk : positive) :
+      forall {t}, expr t -> list (expr tmessage) -> Prop :=
+    | sconst : forall t eta,
+        @signature_safe sk t (expr_const eta) nil
+    | srand_neq :
+        forall i, i <> sk ->
+                  signature_safe sk (expr_random i) nil
+    | sadv : forall e S, signature_safe sk e S ->
+                         signature_safe sk (expr_adversarial e) S
+    | spkeygen :
+        signature_safe sk
+                       (expr_func pkeygen
+                                  (expr_func skeygen (expr_random sk)))
+                       nil
+    | ssign :
+        forall m S,
+          signature_safe sk m S ->
+          signature_safe
+            sk
+            (expr_func sign (expr_pair m
+                                       (expr_func skeygen (expr_random sk))))
+            (m :: S)
+    | sfunc : forall {t1 t2} (f : func t1 t2) e S,
+        signature_safe sk e S ->
+        signature_safe sk (expr_func f e) S
+    | spair : forall {t1 t2} (e1: expr t1) (e2: expr t2) S1 S2,
+        signature_safe sk e1 S1 ->
+        signature_safe sk e2 S2 ->
+        signature_safe sk (expr_pair e1 e2) (S1 ++ S2)
+    .
+
+    Definition expr_in {t} (x : expr t) (S : list (expr t)) : expr tbool :=
+      fold_right (fun (m : expr t) (acc : expr tbool) =>
+                    expr_func f_or (expr_pair
+                                      (expr_func feqb (expr_pair x m))
+                                      acc))
+                 (expr_const vfalse) S.
+
+    Definition signature_safe_conclusion (sk : positive)
+               (m : expr tmessage) (s : expr tsignature)
+               (verify : func (tprod tpkey (tprod tmessage tsignature))
+                              tbool) :=
+      forall S : list (expr tmessage),
+        signature_safe sk s S ->
+        (* It's okay if the key was leaked at the time we got the message,
+           just not the signature; hence no "signature_safe" for m. *)
+        let ve := (expr_func verify (expr_pair (expr_func pkeygen (expr_func skeygen (expr_random sk)))
+                                               (expr_pair m s))) in
+        eqwhp ve
+              (expr_func fand (expr_pair ve
+                                         (expr_in m S))).
+  End Signature.
+
 End Language.

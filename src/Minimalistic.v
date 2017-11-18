@@ -1643,7 +1643,7 @@ End WHP.
     Context {tsignature tskey tpkey : type}.
     Context {skeygen : func trand tskey} (* secret key generation  *)
             {pkeygen : func tskey tpkey} (* public part of key *)
-            {sign : func (tprod tmessage tskey) tsignature}.
+            {sign : func (tprod tskey tmessage) tsignature}.
 
     Inductive signature_safe (sk : positive) :
       forall {t}, expr t -> list (expr tmessage) -> Prop :=
@@ -1664,8 +1664,9 @@ End WHP.
           signature_safe sk m S ->
           signature_safe
             sk
-            (expr_func sign (expr_pair m
-                                       (expr_func skeygen (expr_random sk))))
+            (expr_func sign (expr_pair
+                               (expr_func skeygen (expr_random sk))
+                               m))
             (m :: S)
     | ssfunc : forall {t1 t2} (f : func t1 t2) e S,
         signature_safe sk e S ->
@@ -1694,7 +1695,7 @@ End WHP.
   Section MAC.
     Context {tmac tskey : type}.
     Context {skeygen : func trand tskey} (* secret key generation  *)
-            {mac : func (tprod tmessage tskey) tmac}
+            {mac : func (tprod tskey tmessage) tmac}
             {verify : func (tprod tskey (tprod tmessage tmac)) tbool}.
 
     Inductive mac_safe (sk : positive) :
@@ -1711,8 +1712,9 @@ End WHP.
           mac_safe sk m S ->
           mac_safe
             sk
-            (expr_func mac (expr_pair m
-                                      (expr_func skeygen (expr_random sk))))
+            (expr_func mac (expr_pair
+                              (expr_func skeygen (expr_random sk))
+                              m))
             (m :: S)
     | msfunc : forall {t1 t2} (f : func t1 t2) e S,
         mac_safe sk e S ->
@@ -1733,21 +1735,20 @@ End WHP.
                (m : expr tmessage) (s : expr tmac) :=
       forall S : list (expr tmessage),
         mac_safe sk s S ->
-        let ve := expr_func verify (expr_pair (expr_func skeygen (expr_random sk))
-                                              (expr_pair m s)) in
+        let ve := expr_func verify
+                            (expr_pair (expr_func skeygen (expr_random sk))
+                                       (expr_pair m s)) in
         eqwhp ve
               (expr_func fand (expr_pair ve
                                          (expr_in m S))).
   End MAC.
 
-  (* TODO Do we need nonces for encryption?
-          What about signatures/MACs? *)
-
   Section Encrypt.
-    Context {tmac tkey : type}.
+    Context {tmac tkey tnonce : type}.
     Context {skeygen : func trand tkey}
-            {encrypt : func (tprod tmessage tkey) tmessage}.
+            {encrypt : func (tprod tkey (tprod tnonce tmessage)) tmessage}.
 
+    (* The secret key is used only as the input to encrypt *)
     Inductive encrypt_safe (sk : positive) :
       forall {t}, expr t -> Prop :=
     | esconst : forall t v,
@@ -1757,12 +1758,14 @@ End WHP.
                   encrypt_safe sk (expr_random i)
     | esadv : forall e, encrypt_safe sk e ->
                         encrypt_safe sk (expr_adversarial e)
-    | esencrypt : forall m,
+    | esencrypt : forall n m,
+        encrypt_safe sk n ->
         encrypt_safe sk m -> (* No key cycles *)
         encrypt_safe
           sk
           (expr_func encrypt
-                     (expr_pair m (expr_func skeygen (expr_random sk))))
+                     (expr_pair (expr_func skeygen (expr_random sk))
+                                (expr_pair n m)))
     | esfunc : forall {t1 t2} (f : func t1 t2) e,
         encrypt_safe sk e ->
         encrypt_safe sk (expr_func f e)
@@ -1772,7 +1775,72 @@ End WHP.
         encrypt_safe sk (expr_pair e1 e2)
     .
 
-    (* TODO encryption conclusion *)
+    (* This proposition says that message m is encrypted using
+       secret key sk under nonce n somewhere in an expression. *)
+    Inductive encrypts (sk : positive)
+              (n : expr tnonce) (m : expr tmessage) :
+      forall {t}, expr t -> Prop :=
+    | encs_adv : forall e, encrypts sk n m e ->
+                         encrypts sk n m (expr_adversarial e)
+    | encs_encrypt :
+        encrypts sk n m
+                    (expr_func encrypt
+                               (expr_pair (expr_func skeygen (expr_random sk))
+                                          (expr_pair n m)))
+    | encs_func : forall {t1 t2} (f : func t1 t2) e,
+        encrypts sk n m e ->
+        encrypts sk n m (expr_func f e)
+    | encs_pair_l : forall {t1 t2} (e1 : expr t1) (e2 : expr t2),
+        encrypts sk n m e1 ->
+        encrypts sk n m (expr_pair e1 e2)
+    | encs_pair_r : forall {t1 t2} (e1 : expr t1) (e2 : expr t2),
+        encrypts sk n m e2 ->
+        encrypts sk n m (expr_pair e1 e2)
+    .
+
+    (* Whenever nonces are equal, the corresponding messages are also equal. *)
+    Definition no_nonce_reuse (sk : positive) {t} (e : expr t) : Prop :=
+      forall n1 m1 n2 m2,
+        encrypts sk n1 m1 e ->
+        encrypts sk n2 m2 e ->
+        whp (expr_func fimpl
+                       (expr_pair
+                          (expr_func feqb (expr_pair n1 n2))
+                          (expr_func feqb (expr_pair m1 m2)))).
+
+    (* Equality except for the input to encrypt *)
+    Inductive eq_mod_enc (sk : positive) :
+      forall {t}, expr t -> expr t -> Prop :=
+    | eqe_refl : forall {t} e, @eq_mod_enc sk t e e
+    | eqe_adv : forall e e',
+        eq_mod_enc sk e e' ->
+        eq_mod_enc sk (expr_adversarial e) (expr_adversarial e')
+    | eqe_encrypt : forall n m m',
+        eq_mod_enc sk
+                   (expr_func encrypt
+                              (expr_pair (expr_func skeygen (expr_random sk))
+                                         (expr_pair n m)))
+                   (expr_func encrypt
+                              (expr_pair (expr_func skeygen (expr_random sk))
+                                         (expr_pair n m')))
+    | eqe_func : forall {t1 t2} (f : func t1 t2) e e',
+        eq_mod_enc sk e e' ->
+        eq_mod_enc sk (expr_func f e) (expr_func f e')
+    | eqe_pair : forall {t1 t2} (e1 e1' : expr t1) (e2 e2' : expr t2),
+        eq_mod_enc sk e1 e1' ->
+        eq_mod_enc sk e2 e2' ->
+        eq_mod_enc sk (expr_pair e1 e2) (expr_pair e1' e2').
+
+    (* If the secret key is used correctly, and nonces aren't reused,
+       then we can replace the inputs to encryptions with anything. *)
+    Definition confidentiality_conclusion (sk : positive)
+               {t} (e e' : expr t) :=
+      encrypt_safe sk e ->
+      encrypt_safe sk e' ->
+      no_nonce_reuse sk e ->
+      no_nonce_reuse sk e' ->
+      eq_mod_enc sk e e' ->
+      indist e e'.
 
   End Encrypt.
 

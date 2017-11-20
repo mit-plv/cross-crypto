@@ -1776,7 +1776,13 @@ End WHP.
     .
 
     (* This proposition says that message m is encrypted using
-       secret key sk under nonce n somewhere in an expression. *)
+       secret key sk under nonce n somewhere in an expression.
+
+       FIXME needs to be reworked to be a fixpoint I think since
+       we're having trouble with the type indices.
+
+       Except to be a fixpoint we need to be able to decide whether
+       a function is encrypt... ugh. *)
     Inductive encrypts (sk : positive)
               (n : expr tnonce) (m : expr tmessage) :
       forall {t}, expr t -> Prop :=
@@ -1841,6 +1847,149 @@ End WHP.
       no_nonce_reuse sk e' ->
       eq_mod_enc sk e e' ->
       indist e e'.
+
+    (* Syntactic structure of compliant terms *)
+    Inductive enc_holes (sk : positive) {hole : Type} : type -> Type :=
+    | ench_const {t} (_:forall eta, interp_type t eta) : enc_holes sk t
+    | ench_random (idx:positive) : idx <> sk -> enc_holes sk trand
+    | ench_adversarial (_:enc_holes sk (tlist tmessage)) :
+        enc_holes sk tmessage
+    | ench_func {t1 t2} (_:func t1 t2) (_:enc_holes sk t1) :
+        enc_holes sk t2
+    | ench_pair {t1 t2} (_:enc_holes sk t1) (_:enc_holes sk t2) :
+        enc_holes sk (tprod t1 t2)
+    | ench_encrypt (_:hole) : enc_holes sk tmessage.
+
+    Fixpoint fill_enc_holes {sk : positive} {hole : Type}
+             (nonce : hole -> expr tnonce)
+             (message : hole -> expr tmessage)
+             {t} (eh : @enc_holes sk hole t) : expr t :=
+      match eh with
+      | ench_const _ x => expr_const x
+      | ench_random _ idx _ => expr_random idx
+      | ench_adversarial _ eh' =>
+        expr_adversarial (fill_enc_holes nonce message eh')
+      | ench_func _ f eh' =>
+        expr_func f (fill_enc_holes nonce message eh')
+      | ench_pair _ eh1 eh2 =>
+        expr_pair (fill_enc_holes nonce message eh1)
+                  (fill_enc_holes nonce message eh2)
+      | ench_encrypt _ h =>
+        expr_func encrypt (expr_pair (expr_func skeygen (expr_random sk))
+                                     (expr_pair (nonce h)
+                                                (message h)))
+      end.
+
+    Lemma enc_hole_safe :
+      forall sk {hole} nonce message {t} (eh : @enc_holes sk hole t),
+        (forall h, encrypt_safe sk (nonce h)) ->
+        (forall h, encrypt_safe sk (message h)) ->
+        encrypt_safe sk (fill_enc_holes nonce message eh).
+    Proof.
+      intros;
+        induction eh;
+        cbn [fill_enc_holes];
+        econstructor; eauto.
+    Qed.
+
+    Lemma fill_enc_holes_ind {sk hole}
+          nonce message
+          (P : forall {t}, expr t -> Prop) :
+      (forall h, encrypt_safe sk (nonce h)) ->
+      (forall h, encrypt_safe sk (message h)) ->
+      (forall {t} x, @P t (expr_const x)) ->
+      (forall idx, idx <> sk -> P (expr_random idx)) ->
+      (forall e', P e' ->
+                  P (expr_adversarial e')) ->
+      (forall t1 t2 (f : func t1 t2) e',
+          encrypt_safe sk e' ->
+          P e' -> P (expr_func f e')) ->
+      (forall t1 e1 t2 e2, @P t1 e1 -> @P t2 e2 -> P (expr_pair e1 e2)) ->
+      (forall h, P (expr_func encrypt
+                              (expr_pair (expr_func skeygen (expr_random sk))
+                                         (expr_pair (nonce h)
+                                                    (message h))))) ->
+      forall {t} (eh : @enc_holes sk hole t),
+        P (fill_enc_holes nonce message eh).
+    Proof.
+      intros; induction eh; eauto using enc_hole_safe.
+    Qed.
+
+    Ltac expr_head x :=
+      match x with
+      | expr_const _ => idtac
+      | expr_random _ => idtac
+      | expr_adversarial _ => idtac
+      | expr_func _ _ => idtac
+      | expr_pair _ _ => idtac
+      | _ => fail
+      end.
+
+    Lemma encrypts_hole :
+      forall sk {hole} nonce message {t} (eh : @enc_holes sk hole t) n m,
+        (forall h, encrypt_safe sk (nonce h)) ->
+        (forall h, encrypt_safe sk (message h)) ->
+        (forall h, encrypts sk n m (nonce h) ->
+                   exists h', n = nonce h' /\ m = message h') ->
+        (forall h, encrypts sk n m (message h) ->
+                   exists h', n = nonce h' /\ m = message h') ->
+        encrypts sk n m (fill_enc_holes nonce message eh) ->
+        exists h, n = nonce h /\ m = message h.
+    Proof.
+      intros ? ? ? ? t eh ? ? ? ? ? ? E.
+      revert t eh E.
+      refine (@fill_enc_holes_ind
+                _ _
+                nonce message (fun _ e =>
+                                 encrypts sk n m e ->
+                                 exists h, _)
+                _ _ _ _ _ _ _ _); eauto;
+        intros;
+        repeat match goal with
+               | [ H : @existT type _ ?x ?y = @existT type _ ?x ?y' |- _ ] =>
+                 assert (y = y') by
+                     (eapply inj_pair2_eq_dec;
+                      eauto using EqDec_dec, eqdec_type);
+                   (subst y || subst y');
+                   clear H
+               | [ H : encrypts _ _ _ ?e |- _ ] =>
+                 expr_head e;
+                   inversion H; clear H
+               | [ H : encrypt_safe _ ?e |- _ ] =>
+                 expr_head e;
+                   inversion H; clear H
+               | [ _ : _ = ?t |- _ ] => subst t
+               | [ _ : ?x <> ?x |- _ ] => congruence
+               | _ => eauto
+               end.
+    Qed.
+
+    Lemma enc_hole_no_reuse :
+      forall sk {hole} nonce message {t} (eh : @enc_holes sk hole t),
+        (forall h, encrypt_safe sk (nonce h)) ->
+        (forall h, encrypt_safe sk (message h)) ->
+        (forall n m h, encrypts sk n m (nonce h) ->
+                   exists h', n = nonce h' /\ m = message h') ->
+        (forall n m h, encrypts sk n m (message h) ->
+                   exists h', n = nonce h' /\ m = message h') ->
+        (forall h1 h2,
+            whp (expr_func fimpl
+                           (expr_pair
+                              (expr_func feqb (expr_pair (nonce h1)
+                                                         (nonce h2)))
+                              (expr_func feqb (expr_pair (message h1)
+                                                         (message h2)))))) ->
+        no_nonce_reuse sk (fill_enc_holes nonce message eh).
+    Proof.
+      unfold no_nonce_reuse.
+      intros.
+      repeat match goal with
+             | [ H : encrypts _ ?n' ?m' _ |- _ ] =>
+               edestruct encrypts_hole with (n := n') (m := m')
+                 as [? []]; eauto; clear H
+             end.
+      subst; eauto.
+    Qed.
 
   End Encrypt.
 

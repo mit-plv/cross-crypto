@@ -1880,7 +1880,7 @@ End WHP.
                                                 (message h)))
       end.
 
-    Lemma enc_hole_safe :
+    Lemma fill_safe :
       forall sk {hole} nonce message {t} (eh : @enc_holes sk hole t),
         (forall h, encrypt_safe sk (nonce h)) ->
         (forall h, encrypt_safe sk (message h)) ->
@@ -1912,7 +1912,7 @@ End WHP.
       forall {t} (eh : @enc_holes sk hole t),
         P (fill_enc_holes nonce message eh).
     Proof.
-      intros; induction eh; eauto using enc_hole_safe.
+      intros; induction eh; eauto using fill_safe.
     Qed.
 
     Ltac expr_head x :=
@@ -1925,7 +1925,7 @@ End WHP.
       | _ => fail
       end.
 
-    Lemma encrypts_hole :
+    Lemma encrypts_fill :
       forall sk {hole} nonce message {t} (eh : @enc_holes sk hole t) n m,
         (forall h, encrypt_safe sk (nonce h)) ->
         (forall h, encrypt_safe sk (message h)) ->
@@ -1964,7 +1964,7 @@ End WHP.
                end.
     Qed.
 
-    Lemma enc_hole_no_reuse :
+    Lemma fill_no_reuse :
       forall sk {hole} nonce message {t} (eh : @enc_holes sk hole t),
         (forall h, encrypt_safe sk (nonce h)) ->
         (forall h, encrypt_safe sk (message h)) ->
@@ -1985,10 +1985,63 @@ End WHP.
       intros.
       repeat match goal with
              | [ H : encrypts _ ?n' ?m' _ |- _ ] =>
-               edestruct encrypts_hole with (n := n') (m := m')
+               edestruct encrypts_fill with (n := n') (m := m')
                  as [? []]; eauto; clear H
              end.
       subst; eauto.
+    Qed.
+
+    Lemma fill_mod_enc :
+      forall sk {hole} nonce msg1 msg2 {t} (eh : @enc_holes sk hole t),
+        eq_mod_enc sk
+                   (fill_enc_holes nonce msg1 eh)
+                   (fill_enc_holes nonce msg2 eh).
+    Proof.
+      intros;
+        induction eh; cbn [fill_enc_holes]; econstructor; eauto.
+    Qed.
+
+    Lemma fill_confidentiality sk {hole} nonce msg1 msg2 {t}
+          (eh : @enc_holes sk hole t) :
+      (forall h, encrypt_safe sk (nonce h)) ->
+      (forall h, encrypt_safe sk (msg1 h)) ->
+      (forall h, encrypt_safe sk (msg2 h)) ->
+      (forall n m h, encrypts sk n m (nonce h) ->
+                     exists h', n = nonce h' /\ m = msg1 h') ->
+      (forall n m h, encrypts sk n m (nonce h) ->
+                     exists h', n = nonce h' /\ m = msg2 h') ->
+      (forall n m h, encrypts sk n m (msg1 h) ->
+                     exists h', n = nonce h' /\ m = msg1 h') ->
+      (forall n m h, encrypts sk n m (msg2 h) ->
+                     exists h', n = nonce h' /\ m = msg2 h') ->
+      (forall h1 h2,
+          whp (expr_func fimpl
+                         (expr_pair
+                            (expr_func feqb (expr_pair (nonce h1)
+                                                       (nonce h2)))
+                            (expr_func feqb (expr_pair (msg1 h1)
+                                                       (msg1 h2)))))) ->
+      (forall h1 h2,
+          whp (expr_func fimpl
+                         (expr_pair
+                            (expr_func feqb (expr_pair (nonce h1)
+                                                       (nonce h2)))
+                            (expr_func feqb (expr_pair (msg2 h1)
+                                                       (msg2 h2)))))) ->
+      confidentiality_conclusion sk
+                                 (fill_enc_holes nonce msg1 eh)
+                                 (fill_enc_holes nonce msg2 eh) ->
+      indist (fill_enc_holes nonce msg1 eh)
+             (fill_enc_holes nonce msg2 eh).
+    Proof.
+      intros;
+        repeat match goal with
+               | [ H : confidentiality_conclusion _ _ _ |- indist _ _ ] =>
+                 eapply H
+               | [ |- encrypt_safe _ _ ] => eauto using fill_safe
+               | [ |- no_nonce_reuse _ _ ] => eauto using fill_no_reuse
+               | [ |- eq_mod_enc _ _ _ ] => eauto using fill_mod_enc
+               end.
     Qed.
 
   End Encrypt.

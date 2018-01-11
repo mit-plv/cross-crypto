@@ -1411,6 +1411,9 @@ Section Language.
 
     Global Instance Proper_eqwhp_adversarial : Proper (eqwhp ==> eqwhp) expr_adversarial.
     Admitted.
+
+    Global Instance Proper_eqwhp_func {t1 t2} f : Proper (eqwhp ==> eqwhp) (@expr_func t1 t2 f).
+    Admitted.
   End Equality.
 
   Section LateInterp.

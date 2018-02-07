@@ -11,25 +11,35 @@ Section Language.
           {tbool trand tmessage : type} {tlist : type -> type} {tprod : type -> type -> type}.
   Context {func : type -> type -> Set}.
 
+  Bind Scope etype_scope with type.
+  Delimit Scope etype_scope with etype.
+  Local Notation "A * B" := (tprod A%etype B%etype) : etype_scope.
+  Local Notation "A -> B" := (func A%etype B%etype) : etype_scope.
+
   Inductive expr : type -> Type :=
   | expr_const {t} (_:forall eta, interp_type t eta) : expr t
   | expr_random (idx:positive) : expr trand
   | expr_adversarial (_:expr (tlist tmessage)) : expr tmessage
-  | expr_func {t1 t2} (_:func t1 t2) (_:expr t1) : expr t2
-  | expr_pair {t1 t2} (_:expr t1) (_:expr t2) : expr (tprod t1 t2).
+  | expr_app {t1 t2} (_:(t1 -> t2)%etype) (_:expr t1) : expr t2
+  | expr_pair {t1 t2} (_:expr t1) (_:expr t2) : expr (t1 * t2).
 
   Bind Scope expr_scope with expr.
   Delimit Scope expr_scope with expr.
-  Local Open Scope expr_scope.
+
+  Local Notation "'#' x" := (expr_const x) (right associativity, at level 9, format "# x") : expr_scope.
+  Local Notation "'$' x" := (expr_random x%positive) (right associativity, at level 79, x at next level, format "$ x") : expr_scope. (* FIXME: we want level 9, but it conflicts with fcf *)
+  Local Notation "'!' '@' x" := (expr_adversarial x%expr) (left associativity, at level 11, format "! @ x").
+  Local Notation "f @ x" := (expr_app f x) (left associativity, at level 11, format "f @ x").
+  Local Notation "( x , y , .. , z )" := (expr_pair .. (expr_pair x%expr y%expr) .. z%expr) : expr_scope.
 
   Fixpoint randomness_indices {t:type} (e:expr t) : PositiveSet.t :=
     match e with
-    | expr_const _ => PositiveSet.empty
-    | expr_random idx => PositiveSet.singleton idx
-    | expr_adversarial x => randomness_indices x
-    | expr_func f x => randomness_indices x
-    | expr_pair a b => PositiveSet.union (randomness_indices a) (randomness_indices b)
-    end.
+    | #_ => PositiveSet.empty
+    | $i => PositiveSet.singleton i
+    | !@x => randomness_indices x
+    | f@x => randomness_indices x
+    | (a, b) => PositiveSet.union (randomness_indices a) (randomness_indices b)
+    end%expr.
 
   (* TODO: use a map with a canonical representation *)
   Global Instance randomness_map_eq_dec {eta} : EqDec (PositiveMap.t (interp_type trand eta)). Admitted.
@@ -229,8 +239,8 @@ Section Language.
     Qed.
   End GenerateRandomness.
 
-  Context (interp_func : forall {t1 t2} (f:func t1 t2) {eta}, interp_type t1 eta -> interp_type t2 eta).
-  Context (interp_pair : forall {t1 t2 eta}, interp_type t1 eta -> interp_type t2 eta -> interp_type (tprod t1 t2) eta).
+  Context (interp_func : forall {t1 t2} (f:(t1->t2)%etype) {eta}, interp_type t1 eta -> interp_type t2 eta).
+  Context (interp_pair : forall {t1 t2 eta}, interp_type t1 eta -> interp_type t2 eta -> interp_type (t1 * t2) eta).
   Arguments interp_func {_ _} _ {_}.
   Arguments interp_pair {_ _ _}.
 
@@ -239,19 +249,17 @@ Section Language.
            (rands: PositiveMap.t (interp_type trand eta))
     : interp_type t eta :=
     match e with
-    | expr_const c => c eta
-    | expr_random i => match PositiveMap.find i rands with Some r => r | _ => cast_rand eta (Bvector_exists _) end
-    | expr_adversarial inputs => adv (interp_fixed inputs eta adv rands)
-    | expr_func f inputs => interp_func f (interp_fixed inputs eta adv rands)
-    | expr_pair a b => interp_pair (interp_fixed a eta adv rands) (interp_fixed b eta adv rands)
-    end.
+    | # c => c eta
+    | $ i => match PositiveMap.find i rands with Some r => r | _ => cast_rand eta (Bvector_exists _) end
+    | !@inputs => adv (interp_fixed inputs eta adv rands)
+    | f@inputs => interp_func f (interp_fixed inputs eta adv rands)
+    | (a, b) => interp_pair (interp_fixed a eta adv rands) (interp_fixed b eta adv rands)
+    end%expr.
 
-  Definition interp {t} (e:expr t) (eta:nat)
-             (adv: interp_type (tlist tmessage) eta -> interp_type tmessage eta)
-    : Comp (interp_type t eta)
+  Definition interp {t} (e:expr t) (eta:nat) adv : Comp (interp_type t eta)
     := rands <-$ generate_randomness eta (randomness_indices e); ret (interp_fixed e eta adv rands).
 
-  Global Instance Proper_interp_term_fixed {t} (e:expr t) eta adv :
+  Global Instance Proper_interp_fixed {t} (e:expr t) eta adv :
     Proper (PositiveMap.Equal ==> Logic.eq) (interp_fixed e eta adv).
   Proof.
     cbv [Proper respectful]; induction e; intros; simpl; try reflexivity.
@@ -286,7 +294,7 @@ Section Language.
         eauto using negligible_0, negligible_plus.
     Qed.
 
-    Global Instance Proper_indist_func {t1 t2} f : Proper (@indist t1 ==> @indist t2) (expr_func f).
+    Global Instance Proper_indist_func {t1 t2} f : Proper (@indist t1 ==> @indist t2) (expr_app f).
     Proof.
       cbv [Proper respectful indist universal_security_game interp]; intros.
       cbn [interp_fixed].
@@ -301,12 +309,13 @@ Section Language.
     Qed.
   End Security.
 
-  Infix "≈" := indist (at level 70).
+  Local Infix "≈" := indist (at level 70). (* \approx *)
+  Local Notation "a ≉ b" := (~ (a ≈ b)) (at level 70). (* \napprox *)
 
-  Lemma interp_term_const {t} e eta a : Comp_eq (interp (@expr_const t e) eta a) (ret (e eta)).
+  Lemma interp_const {t} (c : forall eta, interp_type t eta) eta adv : Comp_eq (interp #c eta adv) (ret (c eta)).
   Proof. cbv -[Comp_eq]; setoid_rewrite Bind_unused; reflexivity. Qed.
 
-  Lemma interp_term_rand i eta a : Comp_eq (interp (@expr_random i) eta a) (genrand eta).
+  Lemma interp_rand i eta a : Comp_eq (interp ($i) eta a) (genrand eta).
   Admitted.
 
   Context (vtrue vfalse : forall eta, interp_type tbool eta)
@@ -316,48 +325,48 @@ Section Language.
           (inspect_vfalse : forall eta, inspect_vbool eta (vfalse eta) = false).
   Arguments inspect_vbool {eta}.
 
-  Context (feqb : forall t, func (tprod t t) tbool).
+  Context (feqb : forall {t}, (t*t -> tbool)%etype).
+  Arguments feqb {_}.
+  Local Notation "a == b" := (feqb@(a, b)) : expr_scope.
   Arguments feqb {_}.
   Context (interp_feqb : forall t eta (v1 v2:interp_type t eta),
               interp_func feqb (interp_pair v1 v2) =
               if eqb v1 v2 then vtrue eta else vfalse eta).
 
-  Context (fand : func (tprod tbool tbool) tbool).
-  Context (interp_fand : forall eta v1 v2,
+  Context (fand : (tbool * tbool -> tbool)%etype)
+          (interp_fand : forall eta v1 v2,
               inspect_vbool (interp_func fand (interp_pair v1 v2)) =
               andb (inspect_vbool v1) (inspect_vbool (eta:=eta) v2)).
-  Context (f_or : func (tprod tbool tbool) tbool).
-  Context (interp_f_or : forall eta v1 v2,
+  Local Notation "a /\ b" := (fand@(a, b)) : expr_scope.
+  Context (f_or : (tbool * tbool -> tbool)%etype)
+          (interp_f_or : forall eta v1 v2,
               inspect_vbool (interp_func f_or (interp_pair v1 v2)) =
               orb (inspect_vbool v1) (inspect_vbool (eta:=eta) v2)).
-  Context (fimpl : func (tprod tbool tbool) tbool).
-  Context (interp_fimpl : forall eta v1 v2,
+  Local Notation "a \/ b" := (f_or@(a, b)) : expr_scope.
+  Context (fimpl : (tbool * tbool -> tbool)%etype)
+          (interp_fimpl : forall eta v1 v2,
               inspect_vbool (interp_func fimpl (interp_pair v1 v2)) =
               implb (inspect_vbool v1) (inspect_vbool (eta:=eta) v2)).
-  Context (fnegb : func tbool tbool)
+  Local Notation "a -> b" := (fimpl@(a, b)) : expr_scope.
+  Context (fnegb : (tbool -> tbool)%etype)
           (interp_fnegb : forall eta v,
               inspect_vbool (interp_func fnegb v) =
               negb (inspect_vbool (eta:=eta) v)).
+  Local Notation "~ a" := (fnegb@a) : expr_scope.
 
   Local Existing Instance eq_subrelation | 5.
 
   Section WHP.
-    Definition whp (e:expr tbool) := e ≈ (expr_const vtrue).
+    Definition whp (e:expr tbool) := e ≈ #vtrue.
 
-    Definition whp_game
-               (evil_rand_indices : forall eta:nat, PositiveSet.t)
-               (adversary :
-                  forall (eta:nat)
-                         (rands: PositiveMap.t (interp_type trand eta)),
-                    interp_type (tlist tmessage) eta ->
-                    interp_type tmessage eta)
-               (eta : nat) (e : expr tbool) : Comp Datatypes.bool :=
+    Definition whp_game evil_rand_indices adversary eta e : Comp Datatypes.bool :=
       evil_rands <-$ generate_randomness eta (evil_rand_indices eta);
         out <-$ interp e eta (adversary eta (evil_rands));
         ret negb (inspect_vbool out).
 
     Definition whp_simple (e : expr tbool) :=
       forall adl adv,
+        (* TODO: insert bounds on coputational complexity of [adv] and [dst] here *)
         negligible (fun eta : nat => Pr[whp_game adl adv eta e]).
 
     Lemma pr_false : Pr[ret false] = 0.
@@ -712,9 +721,6 @@ Section Language.
 
     Definition always (e : expr tbool) :=
       forall eta adv rands, interp_fixed e eta adv rands = vtrue eta.
-
-    Definition impl (e1 e2 : expr tbool) :=
-      always (expr_func fimpl (expr_pair e1 e2)).
 
     Lemma Bind_assoc_2 :
       forall {A B C : Set} {e : EqDec (A * B)}
@@ -1097,10 +1103,10 @@ Section Language.
       destruct b1; destruct b2; intuition.
     Qed.
 
-    Lemma whp_impl a b : impl a b -> whp a -> whp b.
+    Lemma whp_impl a b : always (a->b) -> (whp a->whp b)%core.
     Proof.
       repeat rewrite whp_whp_simple.
-      cbv [whp_simple whp_game impl always interp].
+      cbv [whp_simple whp_game always interp].
       intros Himpl A adl adv.
       cbn [interp_fixed] in Himpl.
       assert (forall eta adv rands,
@@ -1178,11 +1184,11 @@ Section Language.
             intros; congruence.
     Qed.
 
-    Corollary whp_or_inl a b : whp a -> whp (expr_func f_or (expr_pair a b)).
+    Corollary whp_or_inl a b : whp a -> whp (a \/ b).
     Proof.
       intros.
       eapply whp_impl; eauto.
-      cbv [impl always].
+      cbv [always].
       intros eta adv rands.
       cbn [interp_fixed].
       eapply inspect_vbool_inj.
@@ -1193,11 +1199,11 @@ Section Language.
         reflexivity.
     Qed.
 
-    Corollary whp_or_inr a b : whp b -> whp (expr_func f_or (expr_pair a b)).
+    Corollary whp_or_inr a b : whp b -> whp (a \/ b).
     Proof.
       intros.
       eapply whp_impl; eauto.
-      cbv [impl always].
+      cbv [always].
       intros eta adv rands.
       cbn [interp_fixed].
       eapply inspect_vbool_inj.
@@ -1209,7 +1215,7 @@ Section Language.
         reflexivity.
     Qed.
 
-    Lemma whp_and a b : whp a /\ whp b -> whp (expr_func fand (expr_pair a b)).
+    Lemma whp_and a b : whp a /\ whp b -> whp (a /\ b).
     Proof.
       rewrite 3 whp_whp_simple.
       cbv [whp_simple whp_game interp].
@@ -1225,7 +1231,7 @@ Section Language.
                 Pr [evil_rands <-$ generate_randomness eta (adl eta);
                     x <-$
                       generate_randomness eta
-                      (randomness_indices (expr_func fand (expr_pair a b)));
+                      (randomness_indices (a /\ b));
                     ret negb
                         (inspect_vbool
                            (interp_fixed a eta (adv eta evil_rands) x))]
@@ -1233,7 +1239,7 @@ Section Language.
                 Pr [evil_rands <-$ generate_randomness eta (adl eta);
                     x <-$
                       generate_randomness eta
-                      (randomness_indices (expr_func fand (expr_pair a b)));
+                      (randomness_indices (a /\ b));
                     ret negb
                         (inspect_vbool
                            (interp_fixed b eta (adv eta evil_rands) x))])).
@@ -1241,7 +1247,7 @@ Section Language.
         set (E := generate_randomness eta (adl eta)).
         set (R := generate_randomness eta
                                       (randomness_indices
-                                         (expr_func fand (expr_pair a b)))).
+                                         (a /\ b))).
         set (I := fun e er r =>
                     inspect_vbool (interp_fixed e eta (adv eta er) r)).
 
@@ -1345,8 +1351,7 @@ Section Language.
   End WHP.
 
   Section Equality.
-    Definition eqwhp {t} (e1 e2:expr t) : Prop :=
-      whp (expr_func feqb (expr_pair e1 e2)).
+    Definition eqwhp {t} (e1 e2:expr t) : Prop := whp (e1 == e2).
 
     Global Instance Reflexive_eqwhp {t} : Reflexive (@eqwhp t).
     Proof.
@@ -1390,7 +1395,7 @@ Section Language.
     Proof.
       cbv [Transitive eqwhp]; intros ??? A B.
       refine (whp_impl _ _ _ (whp_and _ _ (conj A B))).
-      cbv [impl always]; intros; cbn.
+      cbv [always]; intros; cbn.
       etransitivity; [eapply case_tbool|].
       repeat match goal with
              | _ => solve [trivial]
@@ -1412,7 +1417,7 @@ Section Language.
     Global Instance Proper_eqwhp_adversarial : Proper (eqwhp ==> eqwhp) expr_adversarial.
     Admitted.
 
-    Global Instance Proper_eqwhp_func {t1 t2} f : Proper (eqwhp ==> eqwhp) (@expr_func t1 t2 f).
+    Global Instance Proper_eqwhp_func {t1 t2} f : Proper (eqwhp ==> eqwhp) (@expr_app t1 t2 f).
     Admitted.
   End Equality.
 
@@ -1423,23 +1428,23 @@ Section Language.
              (fixed_rand: PositiveMap.t (interp_type trand eta))
     : Comp (interp_type t eta) :=
       match e with
-      | expr_const c => ret (c eta)
-      | expr_random i =>
+      | #c => ret (c eta)
+      | $i =>
         match PositiveMap.find i fixed_rand with
         | Some r => ret r
         | _ => r <-$ {0,1}^eta; ret (cast_rand eta r)
         end
-      | expr_adversarial ctx =>
+      | !@ctx =>
         ctx <-$ interp_late ctx eta adv fixed_rand; ret (adv ctx)
-      | expr_func f x =>
+      | f@x =>
         x <-$ interp_late x eta adv fixed_rand; ret (interp_func f x)
-      | expr_pair a b =>
+      | (a, b) =>
         common_rand <-$ generate_randomness eta (PositiveSet.inter (randomness_indices b) (randomness_indices a));
           let rands := PositiveMapProperties.update common_rand fixed_rand in
           b <-$ interp_late b eta adv rands;
             a <-$ interp_late a eta adv rands;
             ret (interp_pair a b)
-      end.
+      end%expr.
 
     Lemma interp_late_correct' {t} (e:expr t) eta adv :
       forall univ (H:PositiveSet.Subset (randomness_indices e) univ) fixed,
@@ -1531,7 +1536,7 @@ Section Language.
     Qed.
   End LateInterp.
 
-  Lemma indist_rand x y : expr_random x ≈ expr_random y.
+  Lemma indist_rand x y : ($x) ≈ ($y).
   Proof.
     cbv [indist universal_security_game]; intros.
     setoid_rewrite <-interp_late_correct.
@@ -1547,12 +1552,17 @@ Section Language.
 
   (* TODO: do we need explicit substitution to define [interact]? *)
 
-  Context (ite : forall t, func (tprod tbool (tprod t t)) t).
+  Context (ite : forall t, (tbool * t * t -> t)%etype).
   Arguments ite {_}.
-  Context (interp_ite : forall t eta b (v1 v2:interp_type t eta), interp_func ite (interp_pair b (interp_pair v1 v2)) = if inspect_vbool b then v1 else v2).
+  Context (interp_ite : forall t eta b (v1 v2:interp_type t eta), interp_func ite (interp_pair (interp_pair b v1) v2) = if inspect_vbool b then v1 else v2).
   Arguments interp_ite {_ _}.
 
-  Lemma if_same b t (e:expr t) : eqwhp (expr_func ite (expr_pair b (expr_pair e e))) e.
+  Local Notation "'eif' b 'then' x 'else' y" := (ite@(b,x,y))
+                                                  (at level 200, b at level 1000, x at level 1000, y at level 1000,
+                                                   format "'[' '[  ' 'eif'  b  'then' '/' x ']' '/' '[  ' 'else' '/' y ']' ']'")
+                                                : expr_scope.
+
+  Lemma if_same b t (e:expr t) : eqwhp (eif b then e else e) e.
   Proof.
     cbv [eqwhp whp indist universal_security_game interp]; intros.
     cbn [interp_fixed].
@@ -1590,7 +1600,7 @@ Section Language.
     end; solve [ trivial | nia ].
   Qed.
 
-  Lemma tfdist : ~ expr_const vtrue ≈ expr_const vfalse.
+  Lemma tfdist : #vtrue ≉ #vfalse.
   Proof.
     cbv [indist universal_security_game interp].
     intro H.
@@ -1608,7 +1618,7 @@ Section Language.
     eapply not_negligible_const; eauto using rat1_ne_rat0.
   Qed.
 
-  Lemma if_true t (e1 e2:expr t) : eqwhp (expr_func ite (expr_pair (expr_const vtrue) (expr_pair e1 e2))) e1.
+  Lemma if_true t (e1 e2:expr t) : eqwhp (eif #vtrue then e1 else e2) e1.
   Proof.
     cbv [eqwhp whp indist universal_security_game interp]; intros.
     cbn [interp_fixed].
@@ -1625,7 +1635,7 @@ Section Language.
     eapply negligible_0.
   Qed.
 
-  Lemma if_false t (e1 e2:expr t) : eqwhp (expr_func ite (expr_pair (expr_const vfalse) (expr_pair e1 e2))) e2.
+  Lemma if_false t (e1 e2:expr t) : eqwhp (eif #vfalse then e1 else e2) e2.
   Proof.
     cbv [eqwhp whp indist universal_security_game interp]; intros.
     cbn [interp_fixed].
@@ -1642,209 +1652,119 @@ Section Language.
     eapply negligible_0.
   Qed.
 
-  Definition expr_in {t} (x : expr t) (S : list (expr t)) : expr tbool :=
-    fold_right (fun (m : expr t) (acc : expr tbool) =>
-                  expr_func f_or (expr_pair
-                                    (expr_func feqb (expr_pair x m))
-                                    acc))
-               (expr_const vfalse) S.
+  Definition expr_in {t} (x : expr t) : list (expr t) -> expr tbool :=
+    (fold_right (fun m acc => x == m \/ acc)%expr #vfalse)%expr.
 
   Section Signature.
     Context {tsignature tskey tpkey : type}.
-    Context {skeygen : func trand tskey} (* secret key generation  *)
-            {pkeygen : func tskey tpkey} (* public part of key *)
-            {sign : func (tprod tskey tmessage) tsignature}.
+    Context {skeygen : (trand -> tskey)%etype} (* secret key generation  *)
+            {pkeygen : (tskey -> tpkey)%etype} (* public part of key *)
+            {sign : (tskey * tmessage -> tsignature)%etype }.
 
-    Inductive signature_safe (sk : positive) :
-      forall {t}, expr t -> list (expr tmessage) -> Prop :=
-    | ssconst : forall t v,
-        @signature_safe sk t (expr_const v) nil
-    | ssrand_neq :
-        forall i, i <> sk ->
-                  signature_safe sk (expr_random i) nil
-    | ssadv : forall e S, signature_safe sk e S ->
-                         signature_safe sk (expr_adversarial e) S
-    | sspkeygen :
-        signature_safe sk
-                       (expr_func pkeygen
-                                  (expr_func skeygen (expr_random sk)))
-                       nil
-    | sssign :
-        forall m S,
-          signature_safe sk m S ->
-          signature_safe
-            sk
-            (expr_func sign (expr_pair
-                               (expr_func skeygen (expr_random sk))
-                               m))
-            (m :: S)
-    | ssfunc : forall {t1 t2} (f : func t1 t2) e S,
-        signature_safe sk e S ->
-        signature_safe sk (expr_func f e) S
-    | sspair : forall {t1 t2} (e1: expr t1) (e2: expr t2) S1 S2,
+    Inductive signature_safe (sk : positive) : forall {t}, expr t -> list (expr tmessage) -> Prop :=
+    | sspkeygen : signature_safe sk (pkeygen@(skeygen@($sk))) nil
+    | sssign m S : signature_safe sk m S -> signature_safe sk (sign@(skeygen@($sk), m)) (m :: S)
+    | ssrand_neq i : i <> sk -> signature_safe sk ($i) nil
+    (* boring recursion: *)
+    | ssconst t v : @signature_safe sk t #v nil
+    | ssfunc {t1 t2} (f : func t1 t2) e S : signature_safe sk e S -> signature_safe sk (f@e) S
+    | ssadv                           e S : signature_safe sk e S -> signature_safe sk (!@e) S
+    | sspair {t1 t2} (e1: expr t1) (e2: expr t2) S1 S2 :
         signature_safe sk e1 S1 ->
         signature_safe sk e2 S2 ->
-        signature_safe sk (expr_pair e1 e2) (S1 ++ S2)
-    .
+        signature_safe sk (e1, e2) (S1 ++ S2).
 
     Definition signature_safe_conclusion (sk : positive)
                (m : expr tmessage) (s : expr tsignature)
-               (verify : func (tprod tpkey (tprod tmessage tsignature))
-                              tbool) :=
+               (verify : (tpkey * tmessage * tsignature -> tbool)%etype) :=
       forall S : list (expr tmessage),
         signature_safe sk s S ->
         (* It's okay if the key was leaked at the time we got the message,
            just not the signature; hence no "signature_safe" for m. *)
-        let ve := expr_func verify (expr_pair (expr_func pkeygen (expr_func skeygen (expr_random sk)))
-                                              (expr_pair m s)) in
-        eqwhp ve
-              (expr_func fand (expr_pair ve
-                                         (expr_in m S))).
+        let ve := verify@(pkeygen@(skeygen@($sk)), m, s) in
+        eqwhp ve (ve /\ expr_in m S).
   End Signature.
 
   Section MAC.
     Context {tmac tskey : type}.
-    Context {skeygen : func trand tskey} (* secret key generation  *)
-            {mac : func (tprod tskey tmessage) tmac}
-            {verify : func (tprod tskey (tprod tmessage tmac)) tbool}.
+    Context {skeygen : (trand -> tskey)%etype} (* secret key generation  *)
+            {mac : (tskey * tmessage -> tmac)%etype}
+            {verify : (tskey * tmessage * tmac -> tbool)%etype}.
 
-    Inductive mac_safe (sk : positive) :
-      forall {t}, expr t -> list (expr tmessage) -> Prop :=
-    | msconst : forall t v,
-        @mac_safe sk t (expr_const v) nil
-    | msrand_neq :
-        forall i, i <> sk ->
-                  mac_safe sk (expr_random i) nil
-    | msadv : forall e S, mac_safe sk e S ->
-                          mac_safe sk (expr_adversarial e) S
-    | msmac :
-        forall m S,
-          mac_safe sk m S ->
-          mac_safe
-            sk
-            (expr_func mac (expr_pair
-                              (expr_func skeygen (expr_random sk))
-                              m))
-            (m :: S)
-    | msfunc : forall {t1 t2} (f : func t1 t2) e S,
-        mac_safe sk e S ->
-        mac_safe sk (expr_func f e) S
-    | mspair : forall {t1 t2} (e1: expr t1) (e2: expr t2) S1 S2,
+    Inductive mac_safe (sk : positive) : forall {t}, expr t -> list (expr tmessage) -> Prop :=
+    | msmac m S :mac_safe sk m S -> mac_safe sk (mac@(skeygen@($sk), m)) (m :: S)
+    | msverify m s : mac_safe sk (verify@(skeygen@($sk), m, s)) nil
+    | msrand_neq (i:positive) : forall i, i <> sk -> mac_safe sk ($i) nil
+    (* boring recursion: *)
+    | msconst t v : @mac_safe sk t #v nil
+    | msfunc {t1 t2} (f : func t1 t2) e S : mac_safe sk e S -> mac_safe sk (f@e) S
+    | msadv                           e S : mac_safe sk e S -> mac_safe sk (!@e) S
+    | mspair {t1 t2} (e1: expr t1) (e2: expr t2) S1 S2 :
         mac_safe sk e1 S1 ->
         mac_safe sk e2 S2 ->
-        mac_safe sk (expr_pair e1 e2) (S1 ++ S2)
-    | msverify : forall m s,
-        mac_safe sk (expr_func verify
-                            (expr_pair
-                               (expr_func skeygen (expr_random sk))
-                               (expr_pair m s)))
-                 nil
-    .
+        mac_safe sk (e1, e2) (S1 ++ S2).
 
-    Definition mac_safe_conclusion (sk : positive)
-               (m : expr tmessage) (s : expr tmac) :=
+    Definition mac_safe_conclusion (sk : positive) (m : expr tmessage) (s : expr tmac) :=
       forall S : list (expr tmessage),
         mac_safe sk s S ->
-        let ve := expr_func verify
-                            (expr_pair (expr_func skeygen (expr_random sk))
-                                       (expr_pair m s)) in
-        eqwhp ve
-              (expr_func fand (expr_pair ve
-                                         (expr_in m S))).
+        let ve := verify@(skeygen@($sk), m, s) in
+        eqwhp ve (ve /\ expr_in m S).
   End MAC.
 
   Section Encrypt.
     Context {tkey tnonce : type}.
-    Context {skeygen : func trand tkey}
-            {encrypt : func (tprod tkey (tprod tnonce tmessage)) tmessage}.
+    Context {skeygen : (trand -> tkey)%etype}
+            {encrypt : (tkey * tnonce * tmessage -> tmessage)%etype}.
 
     (* The secret key is used only as the input to encrypt *)
-    Inductive encrypt_safe (sk : positive) :
-      forall {t}, expr t -> Prop :=
-    | esconst : forall t v,
-        @encrypt_safe sk t (expr_const v)
-    | esrand_neq :
-        forall i, i <> sk ->
-                  encrypt_safe sk (expr_random i)
-    | esadv : forall e, encrypt_safe sk e ->
-                        encrypt_safe sk (expr_adversarial e)
-    | esencrypt : forall n m,
+    Inductive encrypt_safe (sk : positive) : forall {t}, expr t -> Prop :=
+    | esencrypt n m :
         encrypt_safe sk n ->
         encrypt_safe sk m -> (* No key cycles *)
-        encrypt_safe
-          sk
-          (expr_func encrypt
-                     (expr_pair (expr_func skeygen (expr_random sk))
-                                (expr_pair n m)))
-    | esfunc : forall {t1 t2} (f : func t1 t2) e,
-        encrypt_safe sk e ->
-        encrypt_safe sk (expr_func f e)
-    | espair : forall {t1 t2} (e1: expr t1) (e2: expr t2),
+        encrypt_safe sk (encrypt@(skeygen@($sk), n, m))
+    | esrand_neq (i:positive) : i <> sk -> encrypt_safe sk ($i)
+    (* boring recursion: *)
+    | esconst t v : @encrypt_safe sk t #v
+    | esfunc {t1 t2} (f : func t1 t2) e : encrypt_safe sk e -> encrypt_safe sk (f@e)
+    | esadv                           e : encrypt_safe sk e -> encrypt_safe sk (!@e)
+    | espair {t1 t2} (e1: expr t1) (e2: expr t2) :
         encrypt_safe sk e1 ->
         encrypt_safe sk e2 ->
-        encrypt_safe sk (expr_pair e1 e2)
-    .
+        encrypt_safe sk (e1, e2).
 
     (* This proposition says that message m is encrypted using
        secret key sk under nonce n somewhere in an expression. *)
     Inductive encrypts (sk : positive)
-              (n : expr tnonce) (m : expr tmessage) :
-      forall {t}, expr t -> Prop :=
-    | encs_adv : forall e, encrypts sk n m e ->
-                         encrypts sk n m (expr_adversarial e)
-    | encs_encrypt :
-        encrypts sk n m
-                    (expr_func encrypt
-                               (expr_pair (expr_func skeygen (expr_random sk))
-                                          (expr_pair n m)))
-    | encs_func : forall {t1 t2} (f : func t1 t2) e,
-        encrypts sk n m e ->
-        encrypts sk n m (expr_func f e)
-    | encs_pair_l : forall {t1 t2} (e1 : expr t1) (e2 : expr t2),
-        encrypts sk n m e1 ->
-        encrypts sk n m (expr_pair e1 e2)
-    | encs_pair_r : forall {t1 t2} (e1 : expr t1) (e2 : expr t2),
-        encrypts sk n m e2 ->
-        encrypts sk n m (expr_pair e1 e2)
-    .
+              (n : expr tnonce) (m : expr tmessage) : forall {t}, expr t -> Prop :=
+    | encs_encrypt : encrypts sk n m (encrypt@(skeygen@($sk), n, m))
+    (* boring recursion: *)
+    | encs_func {t1 t2} (f : func t1 t2) e : encrypts sk n m e -> encrypts sk n m (f@e)
+    | encs_adv                           e : encrypts sk n m e -> encrypts sk n m (!@e)
+    | encs_pair_l {t1 t2} (e1 : expr t1) (e2 : expr t2) :
+        encrypts sk n m e1 -> encrypts sk n m (e1, e2)
+    | encs_pair_r {t1 t2} (e1 : expr t1) (e2 : expr t2) :
+        encrypts sk n m e2 -> encrypts sk n m (e1, e2).
 
-    (* Whenever nonces are equal, the corresponding messages are also equal. *)
     Definition no_nonce_reuse (sk : positive) {t} (e : expr t) : Prop :=
-      forall n1 m1 n2 m2,
-        encrypts sk n1 m1 e ->
-        encrypts sk n2 m2 e ->
-        whp (expr_func fimpl
-                       (expr_pair
-                          (expr_func feqb (expr_pair n1 n2))
-                          (expr_func feqb (expr_pair m1 m2)))).
+      forall n1 m1 n2 m2, encrypts sk n1 m1 e -> encrypts sk n2 m2 e -> whp (n1 == n2 -> m1 == m2).
 
     (* Equality except for the input to encrypt *)
-    Inductive eq_mod_enc (sk : positive) :
-      forall {t}, expr t -> expr t -> Prop :=
-    | eqe_refl : forall {t} e, @eq_mod_enc sk t e e
-    | eqe_adv : forall e e',
-        eq_mod_enc sk e e' ->
-        eq_mod_enc sk (expr_adversarial e) (expr_adversarial e')
-    | eqe_encrypt : forall n m m',
-        eq_mod_enc sk
-                   (expr_func encrypt
-                              (expr_pair (expr_func skeygen (expr_random sk))
-                                         (expr_pair n m)))
-                   (expr_func encrypt
-                              (expr_pair (expr_func skeygen (expr_random sk))
-                                         (expr_pair n m')))
-    | eqe_func : forall {t1 t2} (f : func t1 t2) e e',
-        eq_mod_enc sk e e' ->
-        eq_mod_enc sk (expr_func f e) (expr_func f e')
-    | eqe_pair : forall {t1 t2} (e1 e1' : expr t1) (e2 e2' : expr t2),
+    Inductive eq_mod_enc (sk : positive) : forall {t}, expr t -> expr t -> Prop :=
+    | eqe_refl {t} e : @eq_mod_enc sk t e e
+    | eqe_encrypt n m m' : eq_mod_enc sk
+                                      (encrypt@(skeygen@($sk), n, m ))
+                                      (encrypt@(skeygen@($sk), n, m'))
+    (* boring recursion: *)
+    | eqe_func {t1 t2} (f : func t1 t2) e e' : eq_mod_enc sk e e' -> eq_mod_enc sk (f@e) (f@e')
+    | eqe_adv e e'                           : eq_mod_enc sk e e' -> eq_mod_enc sk (!@e) (!@e')
+    | eqe_pair {t1 t2} (e1 e1' : expr t1) (e2 e2' : expr t2) :
         eq_mod_enc sk e1 e1' ->
         eq_mod_enc sk e2 e2' ->
-        eq_mod_enc sk (expr_pair e1 e2) (expr_pair e1' e2').
+        eq_mod_enc sk (e1, e2) (e1', e2').
 
     (* If the secret key is used correctly, and nonces aren't reused,
        then we can replace the inputs to encryptions with anything. *)
-    Definition confidentiality_conclusion (sk : positive)
-               {t} (e e' : expr t) :=
+    Definition confidentiality_conclusion (sk : positive) {t} (e e' : expr t) : Prop :=
       encrypt_safe sk e ->
       encrypt_safe sk e' ->
       no_nonce_reuse sk e ->
@@ -1861,7 +1781,7 @@ Section Language.
     | ench_func {t1 t2} (_:func t1 t2) (_:enc_holes sk t1) :
         enc_holes sk t2
     | ench_pair {t1 t2} (_:enc_holes sk t1) (_:enc_holes sk t2) :
-        enc_holes sk (tprod t1 t2)
+        enc_holes sk (t1 * t2)
     | ench_encrypt (_:hole) : enc_holes sk tmessage.
 
     Fixpoint fill_enc_holes {sk : positive} {hole : Type}
@@ -1869,19 +1789,12 @@ Section Language.
              (message : hole -> expr tmessage)
              {t} (eh : @enc_holes sk hole t) : expr t :=
       match eh with
-      | ench_const _ x => expr_const x
-      | ench_random _ idx _ => expr_random idx
-      | ench_adversarial _ eh' =>
-        expr_adversarial (fill_enc_holes nonce message eh')
-      | ench_func _ f eh' =>
-        expr_func f (fill_enc_holes nonce message eh')
-      | ench_pair _ eh1 eh2 =>
-        expr_pair (fill_enc_holes nonce message eh1)
-                  (fill_enc_holes nonce message eh2)
-      | ench_encrypt _ h =>
-        expr_func encrypt (expr_pair (expr_func skeygen (expr_random sk))
-                                     (expr_pair (nonce h)
-                                                (message h)))
+      | ench_const _ x => #x
+      | ench_random _ idx _ => $idx
+      | ench_adversarial _ eh' => !@(fill_enc_holes nonce message eh')
+      | ench_func _ f      eh' => f@(fill_enc_holes nonce message eh')
+      | ench_pair _ eh1 eh2 => (fill_enc_holes nonce message eh1, fill_enc_holes nonce message eh2)
+      | ench_encrypt _ h => encrypt@(skeygen@($sk), nonce h, message h)
       end.
 
     Lemma fill_safe :
@@ -1901,18 +1814,12 @@ Section Language.
           (P : forall {t}, expr t -> Prop) :
       (forall h, encrypt_safe sk (nonce h)) ->
       (forall h, encrypt_safe sk (message h)) ->
-      (forall {t} x, @P t (expr_const x)) ->
-      (forall idx, idx <> sk -> P (expr_random idx)) ->
-      (forall e', P e' ->
-                  P (expr_adversarial e')) ->
-      (forall t1 t2 (f : func t1 t2) e',
-          encrypt_safe sk e' ->
-          P e' -> P (expr_func f e')) ->
-      (forall t1 e1 t2 e2, @P t1 e1 -> @P t2 e2 -> P (expr_pair e1 e2)) ->
-      (forall h, P (expr_func encrypt
-                              (expr_pair (expr_func skeygen (expr_random sk))
-                                         (expr_pair (nonce h)
-                                                    (message h))))) ->
+      (forall {t} x, @P t (#x)%expr) -> (* WHY do we need a scope annotation here *)
+      (forall idx, idx <> sk -> P ($idx)%expr) -> (* and here? *)
+      (forall e', P e' ->  P (!@e')) ->
+      (forall t1 t2 (f : func t1 t2) e', encrypt_safe sk e' -> P e' -> P (f@e')) ->
+      (forall t1 e1 t2 e2, @P t1 e1 -> @P t2 e2 -> P (e1, e2)%expr) -> (* and here? *)
+      (forall h, P (encrypt@(skeygen@($sk), nonce h, message h))) ->
       forall {t} (eh : @enc_holes sk hole t),
         P (fill_enc_holes nonce message eh).
     Proof.
@@ -1924,7 +1831,7 @@ Section Language.
       | expr_const _ => idtac
       | expr_random _ => idtac
       | expr_adversarial _ => idtac
-      | expr_func _ _ => idtac
+      | expr_app _ _ => idtac
       | expr_pair _ _ => idtac
       | _ => fail
       end.
@@ -1976,13 +1883,7 @@ Section Language.
                    exists h', n = nonce h' /\ m = message h') ->
         (forall n m h, encrypts sk n m (message h) ->
                    exists h', n = nonce h' /\ m = message h') ->
-        (forall h1 h2,
-            whp (expr_func fimpl
-                           (expr_pair
-                              (expr_func feqb (expr_pair (nonce h1)
-                                                         (nonce h2)))
-                              (expr_func feqb (expr_pair (message h1)
-                                                         (message h2)))))) ->
+        (forall h1 h2, whp (nonce h1 == nonce h2 -> message h1 == message h2)) ->
         no_nonce_reuse sk (fill_enc_holes nonce message eh).
     Proof.
       unfold no_nonce_reuse.
@@ -2018,20 +1919,8 @@ Section Language.
                      exists h', n = nonce h' /\ m = msg1 h') ->
       (forall n m h, encrypts sk n m (msg2 h) ->
                      exists h', n = nonce h' /\ m = msg2 h') ->
-      (forall h1 h2,
-          whp (expr_func fimpl
-                         (expr_pair
-                            (expr_func feqb (expr_pair (nonce h1)
-                                                       (nonce h2)))
-                            (expr_func feqb (expr_pair (msg1 h1)
-                                                       (msg1 h2)))))) ->
-      (forall h1 h2,
-          whp (expr_func fimpl
-                         (expr_pair
-                            (expr_func feqb (expr_pair (nonce h1)
-                                                       (nonce h2)))
-                            (expr_func feqb (expr_pair (msg2 h1)
-                                                       (msg2 h2)))))) ->
+      (forall h1 h2, whp (nonce h1 == nonce h2 -> msg1 h1 == msg1 h2)) ->
+      (forall h1 h2, whp (nonce h1 == nonce h2 -> msg2 h1 == msg2 h2)) ->
       confidentiality_conclusion sk
                                  (fill_enc_holes nonce msg1 eh)
                                  (fill_enc_holes nonce msg2 eh) ->
@@ -2052,15 +1941,14 @@ Section Language.
       forall b, implb b true = true.
     Proof. intro b; destruct b; eauto. Qed.
 
-    Lemma whp_true : whp (expr_const vtrue).
+    Lemma whp_true : whp (#vtrue).
     Proof. cbv [whp]. reflexivity. Qed.
 
-    Lemma always_whp :
-      forall e, always e -> whp e.
+    Lemma always_whp e : always e -> whp e.
     Proof.
-      intros e A.
+      intros A.
       eapply whp_impl with (a := expr_const vtrue).
-      - cbv [impl always].
+      - cbv [always].
         intros.
         eapply inspect_vbool_inj.
         cbn [interp_fixed].
@@ -2073,29 +1961,27 @@ Section Language.
       - eapply whp_true.
     Qed.
 
-    (* TODO simplify this proof and abstract the tedium into a
-       tactic *)
-    (* A nonce scheme that always picks constant nonces is safe from reuse. *)
-    Lemma constant_nonce_no_reuse {hole}
+    (* TODO simplify this proof and abstract the tedium into a tactic *)
+    (* A protocol that statically picks distinct nonces is safe from reuse. *)
+    (* More generally, if we have a nonce scheme that always picks
+       distinct constant or random nonces (or a mixture of the two),
+       then it's safe from reuse, because in the formula
+           whp (nonce_i = nonce_j -> message_i = message_j)
+       the antecedent is false with high probability unless i = j
+       in which case the consequent is true with high probability. *)
+    Lemma static_nonces_no_reuse {hole}
           (n : hole -> expr tnonce)
           (N : hole -> _) (m : hole -> expr tmessage) :
       (forall h, n h = expr_const (N h)) ->
       (forall h1 h2 : hole, h1 = h2 \/ h1 <> h2) ->
       (forall (h1 h2 : hole) eta, N h1 eta = N h2 eta -> h1 = h2) ->
-      forall h1 h2,
-        whp (expr_func fimpl
-                       (expr_pair
-                          (expr_func feqb (expr_pair (n h1)
-                                                     (n h2)))
-                          (expr_func feqb (expr_pair (m h1)
-                                                     (m h2))))).
+      forall h1 h2, whp (n h1 == n h2 -> m h1 == m h2).
     Proof.
       intros C hole_dec NI h1 h2.
       destruct (hole_dec h1 h2).
       - subst h2.
-        eapply whp_impl with
-            (a := expr_func feqb (expr_pair (m h1) (m h1))).
-        + cbv [impl always].
+        eapply whp_impl with (a := (m h1 == m h1)%expr).
+        + cbv [always].
           intros.
           cbn [interp_fixed].
           eapply inspect_vbool_inj.
@@ -2114,9 +2000,8 @@ Section Language.
             rewrite inspect_vtrue.
             eauto.
         + refine (Reflexive_eqwhp _).
-      - eapply whp_impl with
-            (a := expr_func fnegb (expr_func feqb (expr_pair (n h1) (n h2)))).
-        + cbv [impl always].
+      - eapply whp_impl with (a := (~ n h1 == n h2)%expr).
+        + cbv [always].
           intros.
           cbn [interp_fixed].
           eapply inspect_vbool_inj.
@@ -2152,42 +2037,33 @@ Section Language.
             rewrite inspect_vtrue.
             eauto.
     Qed.
-
-    (* (above) if we have a nonce scheme that always picks constant
-         (or random or a mixture of the two)
-       nonces, then it's safe from reuse, because
-       in the formula
-           whp (nonce_i = nonce_j -> message_i = message_j)
-       the antecedent is false with high probability unless i = j
-       in which case the consequent is true with high probability.
-     *)
   End Encrypt.
 
   Section ExampleProtocol1.
 
     Context {tsignature tskey tpkey : type}.
-    Context {skeygen : func trand tskey} (* secret key generation  *)
-            {pkeygen : func tskey tpkey} (* public part of key *)
-            {sign : func (tprod tskey tmessage) tsignature}.
-    Context {sverify : func (tprod tpkey (tprod tmessage tsignature)) tbool}.
+    Context {skeygen : (trand -> tskey)%etype} (* secret key generation  *)
+            {pkeygen : (tskey -> tpkey)%etype} (* public part of key *)
+            {sign : (tskey * tmessage -> tsignature)%etype}
+            {sverify : (tpkey * tmessage * tsignature -> tbool)%etype}.
 
     (* todo rewrite conclusions to quantify in the right place *)
 
     Context {signature_correct : forall (sk : positive) (m : expr tmessage) (s : expr tsignature), @signature_safe_conclusion tsignature tskey tpkey skeygen pkeygen sign sk m s sverify}.
 
     Context {tkey tnonce : type}
-            {ekeygen : func trand tkey}
-            {encrypt : func (tprod tkey (tprod tnonce tmessage)) tmessage}
-            {decrypt : func (tprod tkey tmessage) (tprod tbool tmessage)}.
+            {ekeygen : (trand -> tkey)%etype}
+            {encrypt : (tkey * tnonce * tmessage -> tmessage)%etype}
+            {decrypt : (tkey * tmessage -> tbool * tmessage)%etype}.
 
     Context {confidentiality : forall sk {t} (e e' : expr t),
                 @confidentiality_conclusion tkey tnonce ekeygen encrypt
                                             sk t e e'}.
 
     Context {tmac tmkey : type}
-            {mkeygen : func trand tmkey}
-            {mac : func (tprod tmkey tmessage) tmac}
-            {mverify : func (tprod tmkey (tprod tmessage tmac)) tbool}.
+            {mkeygen : (trand -> tmkey)%etype}
+            {mac : (tmkey * tmessage -> tmac)%etype}
+            {mverify : (tmkey * tmessage * tmac -> tbool)%etype}.
 
     Context {mac_correct : forall sk m s,
                 @mac_safe_conclusion tmac tmkey mkeygen mac mverify sk m s}.
@@ -2208,9 +2084,8 @@ Section Language.
     Arguments expr_nil {t}.
     Arguments expr_cons {t}.
 
-    Context {prod_encode : func (tprod tmessage tmessage) tmessage}
-            {prod_decode :
-               func tmessage (tprod tbool (tprod tmessage tmessage))}.
+    Context {prod_encode : (tmessage * tmessage -> tmessage)%etype}
+            {prod_decode : (tmessage -> tbool * tmessage * tmessage)%etype}.
 
     Context {expr_fst : forall t1 t2, expr (tprod t1 t2) -> expr t1}
             {expr_snd : forall t1 t2, expr (tprod t1 t2) -> expr t2}.
@@ -2221,53 +2096,52 @@ Section Language.
 
     Axiom x : expr (tprod tbool tmessage).
 
-    Definition proto skn1 skn2 Kn msg : expr (tprod tbool tmessage) :=
-      let sk1 := expr_func ekeygen skn1 in
-      let sk2 := expr_func mkeygen skn2 in
-      let sK := expr_func skeygen Kn in
-      let msK := expr_func skey2message sK in
-      let enc_out := expr_func encrypt (expr_pair sk1 (expr_pair (expr_const N) msK)) in
-      let mac_out := expr_func mac (expr_pair sk2 enc_out) in
-      let mmac_out := expr_func mac2message mac_out in
+    Definition proto skn1 skn2 Kn msg : expr (tprod tbool tmessage) := (
+      let sk1 := ekeygen@skn1 in
+      let sk2 := mkeygen@skn2 in
+      let sK := skeygen@Kn in
+      let msK := skey2message@sK in
+      let enc_out := encrypt@(sk1, #N, msK) in
+      let mac_out := mac@(sk2, enc_out) in
+      let mmac_out := mac2message@mac_out in
       let net_in_1 := expr_cons enc_out (expr_cons mmac_out expr_nil) in
       let adv_out_1 := expr_adversarial net_in_1 in
-      let adv_out_1_tup := expr_func prod_decode adv_out_1 in
-      let prod_1_decode_ok := expr_fst adv_out_1_tup in
-      let adv_out_msg := expr_fst (expr_snd adv_out_1_tup) in
-      let adv_out_mmac := expr_snd (expr_snd adv_out_1_tup) in
-      let adv_out_mac := expr_func message2mac adv_out_mmac in
-      let check_out := expr_func mverify (expr_pair sk2 (expr_pair adv_out_msg adv_out_mac)) in
-      let dec_out := expr_func decrypt (expr_pair sk1 adv_out_msg) in
+      let adv_out_1_tup : expr (_ * _ * _) := prod_decode@adv_out_1 in
+      let prod_1_decode_ok := expr_fst (expr_fst adv_out_1_tup) in
+      let adv_out_msg := expr_snd (expr_fst adv_out_1_tup) in
+      let adv_out_mmac := expr_snd adv_out_1_tup in
+      let adv_out_mac := message2mac@adv_out_mmac in
+      let check_out := mverify@(sk2, adv_out_msg, adv_out_mac) in
+      let dec_out := decrypt@(sk1,adv_out_msg) in
       let dec_ok := expr_fst dec_out in
       let dec_msg := expr_snd dec_out in
-      let sK' := expr_func message2skey dec_msg in
-      let sign_out := expr_func sign (expr_pair sK' msg) in
-      let sign_out_m := expr_func signature2message sign_out in
+      let sK' := message2skey@dec_msg in
+      let sign_out := sign@(sK, msg) in
+      let sign_out_m := signature2message@sign_out in
 
-      let checks_2 := expr_func fand (expr_pair prod_1_decode_ok (expr_func fand (expr_pair check_out dec_ok))) in
+      let checks_2 := prod_1_decode_ok /\ check_out /\ dec_ok in
       let net_in_good := expr_cons sign_out_m (expr_cons msg net_in_1) in
-      let net_in_2 := expr_func ite (expr_pair checks_2 (expr_pair net_in_good
-                                                                   (expr_cons complaint net_in_1))) in
+      let net_in_2 := eif checks_2 then net_in_good else (expr_cons complaint net_in_1) in
 
-      let adv_out_2 := expr_adversarial net_in_2 in
-      let adv_out_2_tup := expr_func prod_decode adv_out_2 in
-      let prod_2_decode_ok := expr_fst adv_out_2_tup in
-      let adv_out_2_msg := expr_fst (expr_snd adv_out_2_tup) in
-      let adv_out_2_sig_m := expr_snd (expr_snd adv_out_2_tup) in
-      let adv_out_2_sig := expr_func message2signature adv_out_2_sig_m in
-      let pK := expr_func pkeygen sK in
-      let verify_out := expr_func sverify (expr_pair pK (expr_pair adv_out_2_msg adv_out_2_sig)) in
+      let adv_out_2 := !@net_in_2 in
+      let adv_out_2_tup := expr_app prod_decode adv_out_2 in
+      let prod_2_decode_ok := expr_fst (expr_fst adv_out_2_tup) in
+      let adv_out_2_msg := expr_snd (expr_fst adv_out_2_tup) in
+      let adv_out_2_sig_m := expr_snd adv_out_2_tup in
+      let adv_out_2_sig := message2signature@adv_out_2_sig_m in
+      let pK := pkeygen@sK in
+      let verify_out := sverify@(pK, adv_out_2_msg, adv_out_2_sig)  in
 
-      let everything_ok := expr_func fand (expr_pair prod_2_decode_ok verify_out) in
-      expr_pair everything_ok adv_out_2_msg.
+      let everything_ok := prod_2_decode_ok /\ verify_out in
+      (everything_ok, adv_out_2_msg))%expr.
 
     Local Open Scope list_scope.
     Theorem correctness skn1 skn2 Kn msg :
       NoDup (skn1 :: skn2 :: Kn :: nil) ->
       let p := proto skn1 skn2 Kn msg in
-      whp (expr_func fimpl (expr_pair (expr_fst p) (expr_func feqb (expr_pair (expr_snd p) msg)))).
-    Admitted.
+      whp (expr_fst p -> expr_snd p == msg).
+    Abort.
 
-    End ExampleProtocol1.
+  End ExampleProtocol1.
 
 End Language.

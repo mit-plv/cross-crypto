@@ -1656,10 +1656,11 @@ Section Language.
     (fold_right (fun m acc => x == m \/ acc)%expr #vfalse)%expr.
 
   Section Signature.
-    Context {tsignature tskey tpkey : type}.
-    Context {skeygen : (trand -> tskey)%etype} (* secret key generation  *)
+    Context {tsignature tskey tpkey : type}
+            {skeygen : (trand -> tskey)%etype} (* secret key generation  *)
             {pkeygen : (tskey -> tpkey)%etype} (* public part of key *)
-            {sign : (tskey * tmessage -> tsignature)%etype }.
+            {sign : (tskey * tmessage -> tsignature)%etype}
+            {verify : (tpkey * tmessage * tsignature -> tbool)%etype}.
 
     Inductive signature_safe (sk : positive) : forall {t}, expr t -> list (expr tmessage) -> Prop :=
     | sspkeygen : signature_safe sk (pkeygen@(skeygen@($sk))) nil
@@ -1674,27 +1675,28 @@ Section Language.
         signature_safe sk e2 S2 ->
         signature_safe sk (e1, e2) (S1 ++ S2).
 
-    Definition signature_safe_conclusion (sk : positive)
-               (m : expr tmessage) (s : expr tsignature)
-               (verify : (tpkey * tmessage * tsignature -> tbool)%etype) :=
-      forall S : list (expr tmessage),
+    Definition signature_conclusion :=
+      forall (sk : positive)
+             (s : expr tsignature)
+             (S : list (expr tmessage))
+             (m : expr tmessage),
         signature_safe sk s S ->
         (* It's okay if the key was leaked at the time we got the message,
            just not the signature; hence no "signature_safe" for m. *)
         let ve := verify@(pkeygen@(skeygen@($sk)), m, s) in
-        eqwhp ve (ve /\ expr_in m S).
+        whp (ve -> expr_in m S).
   End Signature.
 
   Section MAC.
-    Context {tmac tskey : type}.
-    Context {skeygen : (trand -> tskey)%etype} (* secret key generation  *)
-            {mac : (tskey * tmessage -> tmac)%etype}
-            {verify : (tskey * tmessage * tmac -> tbool)%etype}.
+    Context {tmac tkey : type}.
+    Context {keygen : (trand -> tkey)%etype} (* key generation  *)
+            {mac : (tkey * tmessage -> tmac)%etype}
+            {verify : (tkey * tmessage * tmac -> tbool)%etype}.
 
     Inductive mac_safe (sk : positive) : forall {t}, expr t -> list (expr tmessage) -> Prop :=
-    | msmac m S :mac_safe sk m S -> mac_safe sk (mac@(skeygen@($sk), m)) (m :: S)
-    | msverify m s : mac_safe sk (verify@(skeygen@($sk), m, s)) nil
-    | msrand_neq (i:positive) : forall i, i <> sk -> mac_safe sk ($i) nil
+    | msmac m S : mac_safe sk m S -> mac_safe sk (mac@(keygen@($sk), m)) (m :: S)
+    | msverify m s : mac_safe sk (verify@(keygen@($sk), m, s)) nil
+    | msrand_neq (i:positive) : i <> sk -> mac_safe sk ($i) nil
     (* boring recursion: *)
     | msconst t v : @mac_safe sk t #v nil
     | msfunc {t1 t2} (f : func t1 t2) e S : mac_safe sk e S -> mac_safe sk (f@e) S
@@ -1704,16 +1706,19 @@ Section Language.
         mac_safe sk e2 S2 ->
         mac_safe sk (e1, e2) (S1 ++ S2).
 
-    Definition mac_safe_conclusion (sk : positive) (m : expr tmessage) (s : expr tmac) :=
-      forall S : list (expr tmessage),
+    Definition mac_conclusion :=
+      forall (sk : positive)
+             (s : expr tmac)
+             (S : list (expr tmessage))
+             (m : expr tmessage),
         mac_safe sk s S ->
-        let ve := verify@(skeygen@($sk), m, s) in
-        eqwhp ve (ve /\ expr_in m S).
+        let ve := verify@(keygen@($sk), m, s) in
+        whp (ve -> expr_in m S).
   End MAC.
 
   Section Encrypt.
     Context {tkey tnonce : type}.
-    Context {skeygen : (trand -> tkey)%etype}
+    Context {keygen : (trand -> tkey)%etype}
             {encrypt : (tkey * tnonce * tmessage -> tmessage)%etype}.
 
     (* The secret key is used only as the input to encrypt *)
@@ -1721,7 +1726,7 @@ Section Language.
     | esencrypt n m :
         encrypt_safe sk n ->
         encrypt_safe sk m -> (* No key cycles *)
-        encrypt_safe sk (encrypt@(skeygen@($sk), n, m))
+        encrypt_safe sk (encrypt@(keygen@($sk), n, m))
     | esrand_neq (i:positive) : i <> sk -> encrypt_safe sk ($i)
     (* boring recursion: *)
     | esconst t v : @encrypt_safe sk t #v
@@ -1736,7 +1741,7 @@ Section Language.
        secret key sk under nonce n somewhere in an expression. *)
     Inductive encrypts (sk : positive)
               (n : expr tnonce) (m : expr tmessage) : forall {t}, expr t -> Prop :=
-    | encs_encrypt : encrypts sk n m (encrypt@(skeygen@($sk), n, m))
+    | encs_encrypt : encrypts sk n m (encrypt@(keygen@($sk), n, m))
     (* boring recursion: *)
     | encs_func {t1 t2} (f : func t1 t2) e : encrypts sk n m e -> encrypts sk n m (f@e)
     | encs_adv                           e : encrypts sk n m e -> encrypts sk n m (!@e)
@@ -1745,15 +1750,23 @@ Section Language.
     | encs_pair_r {t1 t2} (e1 : expr t1) (e2 : expr t2) :
         encrypts sk n m e2 -> encrypts sk n m (e1, e2).
 
+    (* Whenever nonces are equal, the corresponding messages are also
+       equal.
+
+       Note that this definition doesn't account for birthday attacks. *)
     Definition no_nonce_reuse (sk : positive) {t} (e : expr t) : Prop :=
       forall n1 m1 n2 m2, encrypts sk n1 m1 e -> encrypts sk n2 m2 e -> whp (n1 == n2 -> m1 == m2).
 
     (* Equality except for the input to encrypt *)
+    (* FIXME does not take into account the length of a message.
+       Or maybe I've been assuming messages are variable-length.
+       (See message-tupling.)
+       Either way something is very wrong. *)
     Inductive eq_mod_enc (sk : positive) : forall {t}, expr t -> expr t -> Prop :=
     | eqe_refl {t} e : @eq_mod_enc sk t e e
     | eqe_encrypt n m m' : eq_mod_enc sk
-                                      (encrypt@(skeygen@($sk), n, m ))
-                                      (encrypt@(skeygen@($sk), n, m'))
+                                      (encrypt@(keygen@($sk), n, m ))
+                                      (encrypt@(keygen@($sk), n, m'))
     (* boring recursion: *)
     | eqe_func {t1 t2} (f : func t1 t2) e e' : eq_mod_enc sk e e' -> eq_mod_enc sk (f@e) (f@e')
     | eqe_adv e e'                           : eq_mod_enc sk e e' -> eq_mod_enc sk (!@e) (!@e')
@@ -1764,13 +1777,14 @@ Section Language.
 
     (* If the secret key is used correctly, and nonces aren't reused,
        then we can replace the inputs to encryptions with anything. *)
-    Definition confidentiality_conclusion (sk : positive) {t} (e e' : expr t) : Prop :=
-      encrypt_safe sk e ->
-      encrypt_safe sk e' ->
-      no_nonce_reuse sk e ->
-      no_nonce_reuse sk e' ->
-      eq_mod_enc sk e e' ->
-      indist e e'.
+    Definition confidentiality_conclusion :=
+      forall (sk : positive) {t} (e e' : expr t),
+        encrypt_safe sk e ->
+        encrypt_safe sk e' ->
+        no_nonce_reuse sk e ->
+        no_nonce_reuse sk e' ->
+        eq_mod_enc sk e e' ->
+        indist e e'.
 
     (* Syntactic structure of compliant terms *)
     Inductive enc_holes (sk : positive) {hole : Type} : type -> Type :=
@@ -1794,7 +1808,7 @@ Section Language.
       | ench_adversarial _ eh' => !@(fill_enc_holes nonce message eh')
       | ench_func _ f      eh' => f@(fill_enc_holes nonce message eh')
       | ench_pair _ eh1 eh2 => (fill_enc_holes nonce message eh1, fill_enc_holes nonce message eh2)
-      | ench_encrypt _ h => encrypt@(skeygen@($sk), nonce h, message h)
+      | ench_encrypt _ h => encrypt@(keygen@($sk), nonce h, message h)
       end.
 
     Lemma fill_safe :
@@ -1803,8 +1817,7 @@ Section Language.
         (forall h, encrypt_safe sk (message h)) ->
         encrypt_safe sk (fill_enc_holes nonce message eh).
     Proof.
-      intros;
-        induction eh;
+      induction eh;
         cbn [fill_enc_holes];
         econstructor; eauto.
     Qed.
@@ -1819,11 +1832,11 @@ Section Language.
       (forall e', P e' ->  P (!@e')) ->
       (forall t1 t2 (f : func t1 t2) e', encrypt_safe sk e' -> P e' -> P (f@e')) ->
       (forall t1 e1 t2 e2, @P t1 e1 -> @P t2 e2 -> P (e1, e2)%expr) -> (* and here? *)
-      (forall h, P (encrypt@(skeygen@($sk), nonce h, message h))) ->
+      (forall h, P (encrypt@(keygen@($sk), nonce h, message h))) ->
       forall {t} (eh : @enc_holes sk hole t),
         P (fill_enc_holes nonce message eh).
     Proof.
-      intros; induction eh; eauto using fill_safe.
+      induction eh; eauto using fill_safe.
     Qed.
 
     Ltac expr_head x :=
@@ -1902,8 +1915,7 @@ Section Language.
                    (fill_enc_holes nonce msg1 eh)
                    (fill_enc_holes nonce msg2 eh).
     Proof.
-      intros;
-        induction eh; cbn [fill_enc_holes]; econstructor; eauto.
+      induction eh; cbn [fill_enc_holes]; econstructor; eauto.
     Qed.
 
     Lemma fill_confidentiality sk {hole} nonce msg1 msg2 {t}
@@ -1921,15 +1933,13 @@ Section Language.
                      exists h', n = nonce h' /\ m = msg2 h') ->
       (forall h1 h2, whp (nonce h1 == nonce h2 -> msg1 h1 == msg1 h2)) ->
       (forall h1 h2, whp (nonce h1 == nonce h2 -> msg2 h1 == msg2 h2)) ->
-      confidentiality_conclusion sk
-                                 (fill_enc_holes nonce msg1 eh)
-                                 (fill_enc_holes nonce msg2 eh) ->
+      confidentiality_conclusion ->
       indist (fill_enc_holes nonce msg1 eh)
              (fill_enc_holes nonce msg2 eh).
     Proof.
       intros;
         repeat match goal with
-               | [ H : confidentiality_conclusion _ _ _ |- indist _ _ ] =>
+               | [ H : confidentiality_conclusion |- indist _ _ ] =>
                  eapply H
                | [ |- encrypt_safe _ _ ] => eauto using fill_safe
                | [ |- no_nonce_reuse _ _ ] => eauto using fill_no_reuse
@@ -1939,7 +1949,7 @@ Section Language.
 
     Lemma implb_true_r :
       forall b, implb b true = true.
-    Proof. intro b; destruct b; eauto. Qed.
+    Proof. destruct b; eauto. Qed.
 
     Lemma whp_true : whp (#vtrue).
     Proof. cbv [whp]. reflexivity. Qed.
@@ -1962,14 +1972,12 @@ Section Language.
     Qed.
 
     (* TODO simplify this proof and abstract the tedium into a tactic *)
-    (* A protocol that statically picks distinct nonces is safe from reuse. *)
-    (* More generally, if we have a nonce scheme that always picks
-       distinct constant or random nonces (or a mixture of the two),
-       then it's safe from reuse, because in the formula
+    (* A nonce scheme that always picks constant nonces is safe from reuse:
+       In the formula
            whp (nonce_i = nonce_j -> message_i = message_j)
        the antecedent is false with high probability unless i = j
        in which case the consequent is true with high probability. *)
-    Lemma static_nonces_no_reuse {hole}
+    Lemma constant_nonce_no_reuse {hole}
           (n : hole -> expr tnonce)
           (N : hole -> _) (m : hole -> expr tmessage) :
       (forall h, n h = expr_const (N h)) ->
@@ -2040,107 +2048,166 @@ Section Language.
   End Encrypt.
 
   Section ExampleProtocol1.
-
     Context {tsignature tskey tpkey : type}.
     Context {skeygen : (trand -> tskey)%etype} (* secret key generation  *)
             {pkeygen : (tskey -> tpkey)%etype} (* public part of key *)
             {sign : (tskey * tmessage -> tsignature)%etype}
             {sverify : (tpkey * tmessage * tsignature -> tbool)%etype}.
 
-    (* todo rewrite conclusions to quantify in the right place *)
-
-    Context {signature_correct : forall (sk : positive) (m : expr tmessage) (s : expr tsignature), @signature_safe_conclusion tsignature tskey tpkey skeygen pkeygen sign sk m s sverify}.
+    Context {signature_correct : forall (sk : positive) (m : expr tmessage) (s : expr tsignature), @signature_conclusion tsignature tskey tpkey skeygen pkeygen sign sverify}.
 
     Context {tkey tnonce : type}
             {ekeygen : (trand -> tkey)%etype}
             {encrypt : (tkey * tnonce * tmessage -> tmessage)%etype}
             {decrypt : (tkey * tmessage -> tbool * tmessage)%etype}.
 
-    Context {confidentiality : forall sk {t} (e e' : expr t),
-                @confidentiality_conclusion tkey tnonce ekeygen encrypt
-                                            sk t e e'}.
+    Context {confidentiality :
+               @confidentiality_conclusion tkey tnonce ekeygen encrypt}.
 
     Context {tmac tmkey : type}
             {mkeygen : (trand -> tmkey)%etype}
             {mac : (tmkey * tmessage -> tmac)%etype}
             {mverify : (tmkey * tmessage * tmac -> tbool)%etype}.
 
-    Context {mac_correct : forall sk m s,
-                @mac_safe_conclusion tmac tmkey mkeygen mac mverify sk m s}.
+    Context {mac_correct :
+               @mac_conclusion tmac tmkey mkeygen mac mverify}.
 
-    Context {skey2message : func tskey tmessage}
-            {message2skey : func tmessage tskey}
-            {pkey2message : func tpkey tmessage}
-            {message2pkey : func tmessage tpkey}
-            {mac2message : func tmac tmessage}
-            {message2mac : func tmessage tmac}
-            {signature2message : func tsignature tmessage}
-            {message2signature : func tmessage tsignature}.
+    Context {skey2message : (tskey -> tmessage)%etype}
+            {message2skey : (tmessage -> tskey)%etype}
+            {pkey2message : (tpkey -> tmessage)%etype}
+            {message2pkey : (tmessage -> tpkey)%etype}
+            {mac2message : (tmac -> tmessage)%etype}
+            {message2mac : (tmessage -> tmac)%etype}
+            {signature2message : (tsignature -> tmessage)%etype}
+            {message2signature : (tmessage -> tsignature)%etype}.
 
+    (* constant nonce *)
     Context {N : forall eta, interp_type tnonce eta}.
 
-    Context {expr_nil : forall t, expr (tlist t)}.
-    Context {expr_cons : forall t, expr t -> expr (tlist t) -> expr (tlist t)}.
-    Arguments expr_nil {t}.
-    Arguments expr_cons {t}.
+    Context {cnil : forall t eta, interp_type (tlist t) eta}
+            {fcons : forall t, (t * tlist t -> tlist t)%etype}.
+    Arguments cnil {_}.
+    Arguments fcons {_}.
 
     Context {prod_encode : (tmessage * tmessage -> tmessage)%etype}
             {prod_decode : (tmessage -> tbool * tmessage * tmessage)%etype}.
 
-    Context {expr_fst : forall t1 t2, expr (tprod t1 t2) -> expr t1}
-            {expr_snd : forall t1 t2, expr (tprod t1 t2) -> expr t2}.
-    Arguments expr_fst {t1 t2}.
-    Arguments expr_snd {t1 t2}.
+    Context {ffst : forall t1 t2, (t1 * t2 -> t1)%etype}
+            {fsnd : forall t1 t2, (t1 * t2 -> t2)%etype}.
+    Arguments ffst {_ _}.
+    Arguments fsnd {_ _}.
 
-    Context {complaint : expr tmessage}.
-
-    Axiom x : expr (tprod tbool tmessage).
-
-    Definition proto skn1 skn2 Kn msg : expr (tprod tbool tmessage) := (
-      let sk1 := ekeygen@skn1 in
-      let sk2 := mkeygen@skn2 in
-      let sK := skeygen@Kn in
-      let msK := skey2message@sK in
-      let enc_out := encrypt@(sk1, #N, msK) in
-      let mac_out := mac@(sk2, enc_out) in
-      let mmac_out := mac2message@mac_out in
-      let net_in_1 := expr_cons enc_out (expr_cons mmac_out expr_nil) in
-      let adv_out_1 := expr_adversarial net_in_1 in
-      let adv_out_1_tup : expr (_ * _ * _) := prod_decode@adv_out_1 in
-      let prod_1_decode_ok := expr_fst (expr_fst adv_out_1_tup) in
-      let adv_out_msg := expr_snd (expr_fst adv_out_1_tup) in
-      let adv_out_mmac := expr_snd adv_out_1_tup in
-      let adv_out_mac := message2mac@adv_out_mmac in
-      let check_out := mverify@(sk2, adv_out_msg, adv_out_mac) in
-      let dec_out := decrypt@(sk1,adv_out_msg) in
-      let dec_ok := expr_fst dec_out in
-      let dec_msg := expr_snd dec_out in
-      let sK' := message2skey@dec_msg in
-      let sign_out := sign@(sK, msg) in
-      let sign_out_m := signature2message@sign_out in
-
-      let checks_2 := prod_1_decode_ok /\ check_out /\ dec_ok in
-      let net_in_good := expr_cons sign_out_m (expr_cons msg net_in_1) in
-      let net_in_2 := eif checks_2 then net_in_good else (expr_cons complaint net_in_1) in
-
-      let adv_out_2 := !@net_in_2 in
-      let adv_out_2_tup := expr_app prod_decode adv_out_2 in
-      let prod_2_decode_ok := expr_fst (expr_fst adv_out_2_tup) in
-      let adv_out_2_msg := expr_snd (expr_fst adv_out_2_tup) in
-      let adv_out_2_sig_m := expr_snd adv_out_2_tup in
-      let adv_out_2_sig := message2signature@adv_out_2_sig_m in
-      let pK := pkeygen@sK in
-      let verify_out := sverify@(pK, adv_out_2_msg, adv_out_2_sig)  in
-
-      let everything_ok := prod_2_decode_ok /\ verify_out in
-      (everything_ok, adv_out_2_msg))%expr.
+    Context {complaint arbitrary : forall eta, interp_type tmessage eta}.
 
     Local Open Scope list_scope.
-    Theorem correctness skn1 skn2 Kn msg :
-      NoDup (skn1 :: skn2 :: Kn :: nil) ->
-      let p := proto skn1 skn2 Kn msg in
-      whp (expr_fst p -> expr_snd p == msg).
-    Abort.
+    Context (skn1 skn2 Kn : positive) (msg : expr tmessage)
+            (nodup : NoDup (skn1 :: skn2 :: Kn :: nil)).
+
+    Section Protocol1Rewrite.
+      (* FIXME lots of definitions here get leaked.  It's nice to be
+         able t oalk about them outside this section for proving things
+         about them, so the best thing to do here may be to move the
+         whole thing inside its own module later. *)
+
+      Inductive protocol1_rewrite_state :=
+      | Start
+      | ElimDec
+      | RewriteEnc.
+
+      Variable (s : protocol1_rewrite_state).
+
+      Definition sk1 := ekeygen@($skn1).
+      Definition sk2 := mkeygen@($skn2).
+      Definition sK := skeygen@($Kn).
+      Definition msK := skey2message@sK.
+      Definition enc_out :=
+        encrypt@(sk1, #N, match s with
+                          | RewriteEnc => #arbitrary
+                          | _ => msK
+                          end).
+      Definition mac_out := mac@(sk2, enc_out).
+      Definition mmac_out := mac2message@mac_out.
+      Definition net_in_1 := fcons@(enc_out, fcons@(mmac_out, #cnil)).
+      Definition adv_out_1 := !@net_in_1.
+      Definition adv_out_1_tup := prod_decode@adv_out_1.
+      Definition prod_1_decode_ok := ffst@(ffst@adv_out_1_tup).
+      Definition adv_out_msg := fsnd@(ffst@adv_out_1_tup).
+      Definition adv_out_mmac := fsnd@adv_out_1_tup.
+      Definition adv_out_mac := message2mac@adv_out_mmac.
+      Definition check_out := mverify@(sk2, adv_out_msg, adv_out_mac).
+      Definition dec_out :=
+        match s with
+        | Start => decrypt@(sk1, adv_out_msg)
+        | _ => (#vtrue, msK)
+        end%expr.
+      Definition dec_ok := ffst@dec_out.
+      Definition dec_msg := fsnd@dec_out.
+      Definition sK' := message2skey@dec_msg.
+      Definition sign_out := sign@(sK', msg).
+      Definition sign_out_m := signature2message@sign_out.
+
+      Definition checks_2 := (prod_1_decode_ok /\ check_out /\ dec_ok)%expr.
+      Definition net_in_good := fcons@(sign_out_m, fcons@(msg, net_in_1)).
+      Definition net_in_2 := (eif checks_2
+                              then net_in_good
+                              else fcons@(#complaint, net_in_1))%expr.
+
+      Definition adv_out_2 := !@net_in_2.
+      Definition adv_out_2_tup := prod_decode@adv_out_2.
+      Definition prod_2_decode_ok := ffst@(ffst@adv_out_2_tup).
+      Definition adv_out_2_msg := fsnd@(ffst@adv_out_2_tup).
+      Definition adv_out_2_sig_m := fsnd@adv_out_2_tup.
+      Definition adv_out_2_sig := message2signature@adv_out_2_sig_m.
+      Definition pK := pkeygen@sK.
+      Definition verify_out := sverify@(pK, adv_out_2_msg, adv_out_2_sig).
+
+      Definition everything_ok := (prod_2_decode_ok /\ verify_out)%expr.
+
+      Definition ok_msg : expr (tbool * tmessage) :=
+        (everything_ok, adv_out_2_msg).
+
+      Lemma ex_pr1_mac : whp (checks_2 -> adv_out_msg == enc_out).
+        eapply whp_impl with
+            (a := (check_out -> expr_in adv_out_msg (enc_out :: nil))%expr).
+        - admit.
+        - cbv [check_out].
+          eapply mac_correct.
+
+          assert (@mac_safe tmac tmkey mkeygen mac mverify skn2 _ enc_out nil)
+            as enc_out_mac_safe.
+          {
+            repeat match goal with
+                   | [ |- context[match ?s with _ => _ end] ] =>
+                     match type of s with
+                     | protocol1_rewrite_state => destruct s
+                     end
+                   | [ |- mac_safe _ _ _ ] =>
+                     econstructor || eapply mspair with (S1 := nil)
+                   | [ |- _ <> _ ] =>
+                     intro;
+                       repeat (subst;
+                               match goal with
+                               | [ H : NoDup _ |- _ ] =>
+                                 inversion_clear H
+                               end;
+                               cbv [In] in *;
+                               eauto)
+                   end.
+          }
+
+          repeat econstructor.
+          eapply mspair with (S1 := nil); eauto.
+          repeat econstructor.
+          eapply mspair with (S1 := enc_out :: nil);
+            repeat (eauto || econstructor).
+      Admitted.
+
+    End Protocol1Rewrite.
+
+    Theorem example_proto_1_authenticity :
+      let p := ok_msg Start in
+      whp (ffst@p -> fsnd@p == msg).
+    Admitted.
 
   End ExampleProtocol1.
 

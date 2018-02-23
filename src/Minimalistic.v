@@ -354,7 +354,23 @@ Section Language.
               negb (inspect_vbool (eta:=eta) v)).
   Local Notation "~ a" := (fnegb@a) : expr_scope.
 
-  Local Existing Instance eq_subrelation | 5.
+  Section TBool.
+    Definition tbool_rect eta
+               (P : interp_type tbool eta -> Type)
+               (f : P (vfalse eta)) (t : P (vtrue eta))
+               (b : interp_type tbool eta) : P b.
+      rewrite case_tbool; destruct (inspect_vbool b); eauto.
+    Defined.
+
+    Lemma inspect_vbool_inj : forall eta (x y : interp_type tbool eta),
+        inspect_vbool x = inspect_vbool y -> x = y.
+    Proof.
+      intros ? x; pattern x; eapply tbool_rect; clear x;
+        intro y; pattern y; eapply tbool_rect; clear y;
+          repeat rewrite inspect_vfalse; repeat rewrite inspect_vtrue;
+            intros; congruence.
+    Qed.
+  End TBool.
 
   Section WHP.
     Definition whp (e:expr tbool) := e ≈ #vtrue.
@@ -369,6 +385,45 @@ Section Language.
         (* TODO: insert bounds on coputational complexity of [adv] and [dst] here *)
         negligible (fun eta : nat => Pr[whp_game adl adv eta e]).
 
+    Definition always (e : expr tbool) :=
+      forall eta adv rands, interp_fixed e eta adv rands = vtrue eta.
+  End WHP.
+
+
+  Hint Rewrite interp_fimpl : push_interp.
+  Hint Rewrite interp_fand : push_interp.
+  Hint Rewrite interp_f_or : push_interp.
+  Hint Rewrite interp_fimpl : push_interp.
+  Hint Rewrite interp_feqb : push_interp.
+  Hint Rewrite inspect_vtrue : push_interp.
+  Hint Rewrite inspect_vfalse : push_interp.
+
+  Ltac solve_always' :=
+    repeat match goal with
+           | |- always _ => cbv [always]; intros
+           | _ => progress cbn [interp_fixed]
+           | |- ?x = _ =>
+             match type of x with
+             | interp_type tbool _ => eapply inspect_vbool_inj
+             end
+           | _ => autorewrite with push_interp
+           end.
+
+  Ltac remember_inspect_vbool :=
+    repeat match goal with
+           | [ |- context[inspect_vbool (interp_fixed ?e _ _ _)] ] =>
+             is_var e;
+             let v := fresh e in
+             rename e into v;
+             remember (inspect_vbool (interp_fixed v _ _ _)) as e
+           end.
+
+  Ltac solve_always := solve_always'; remember_inspect_vbool.
+
+
+  Local Existing Instance eq_subrelation | 5.
+
+  Section WHPLemmas.
     Lemma pr_false : Pr[ret false] = 0.
     Proof.
       cbn; destruct (EqDec_dec bool_EqDec false true); congruence.
@@ -580,13 +635,6 @@ Section Language.
       reflexivity.
     Qed.
 
-    Definition tbool_rect eta
-               (P : interp_type tbool eta -> Type)
-               (f : P (vfalse eta)) (t : P (vtrue eta))
-               (b : interp_type tbool eta) : P b.
-      rewrite case_tbool; destruct (inspect_vbool b); eauto.
-    Defined.
-
     Lemma vfalse_eq_vbool_false eta :
       (vfalse eta ?= vtrue eta) = false.
     Proof.
@@ -718,9 +766,6 @@ Section Language.
     Proof.
       intuition eauto using whp_simple_to_whp, whp_to_whp_simple.
     Qed.
-
-    Definition always (e : expr tbool) :=
-      forall eta adv rands, interp_fixed e eta adv rands = vtrue eta.
 
     Lemma Bind_assoc_2 :
       forall {A B C : Set} {e : EqDec (A * B)}
@@ -1103,7 +1148,7 @@ Section Language.
       destruct b1; destruct b2; intuition.
     Qed.
 
-    Lemma whp_impl a b : always (a->b) -> (whp a->whp b)%core.
+    Lemma whp_impl_dist a b : always (a -> b) -> (whp a -> whp b)%core.
     Proof.
       repeat rewrite whp_whp_simple.
       cbv [whp_simple whp_game always interp].
@@ -1175,44 +1220,18 @@ Section Language.
       eauto.
     Qed.
 
-    Lemma inspect_vbool_inj : forall eta (x y : interp_type tbool eta),
-        inspect_vbool x = inspect_vbool y -> x = y.
-    Proof.
-      intros ? x; pattern x; eapply tbool_rect; clear x;
-        intro y; pattern y; eapply tbool_rect; clear y;
-          repeat rewrite inspect_vfalse; repeat rewrite inspect_vtrue;
-            intros; congruence.
-    Qed.
-
     Corollary whp_or_inl a b : whp a -> whp (a \/ b).
     Proof.
-      intros.
-      eapply whp_impl; eauto.
-      cbv [always].
-      intros eta adv rands.
-      cbn [interp_fixed].
-      eapply inspect_vbool_inj.
-      rewrite interp_fimpl.
-      rewrite interp_f_or.
-      rewrite inspect_vtrue.
-      destruct (inspect_vbool (interp_fixed a eta adv rands));
-        reflexivity.
+      intros; eapply whp_impl_dist; eauto.
+      solve_always.
+      destruct a; destruct b; reflexivity.
     Qed.
 
     Corollary whp_or_inr a b : whp b -> whp (a \/ b).
     Proof.
-      intros.
-      eapply whp_impl; eauto.
-      cbv [always].
-      intros eta adv rands.
-      cbn [interp_fixed].
-      eapply inspect_vbool_inj.
-      rewrite interp_fimpl.
-      rewrite interp_f_or.
-      rewrite inspect_vtrue.
-      destruct (inspect_vbool (interp_fixed a eta adv rands));
-        destruct (inspect_vbool (interp_fixed b eta adv rands));
-        reflexivity.
+      intros; eapply whp_impl_dist; eauto.
+      solve_always.
+      destruct a; destruct b; reflexivity.
     Qed.
 
     Lemma whp_and a b : whp a /\ whp b -> whp (a /\ b).
@@ -1348,7 +1367,34 @@ Section Language.
           eauto.
     Qed.
 
-  End WHP.
+    Lemma implb_true_r :
+      forall b, implb b true = true.
+    Proof. destruct b; eauto. Qed.
+
+    Lemma whp_true : whp (#vtrue).
+    Proof. cbv [whp]. reflexivity. Qed.
+
+    Lemma always_whp e : always e -> whp e.
+    Proof.
+      intros A.
+      eapply whp_impl_dist with (a := (#vtrue)%expr).
+      - solve_always'.
+        cbv [implb].
+        rewrite A.
+        solve_always.
+        reflexivity.
+      - eapply whp_true.
+    Qed.
+
+    Lemma whp_impl a b : whp (a -> b) -> (whp a -> whp b)%core.
+    Proof.
+      intros I A.
+      eapply whp_impl_dist with (a := (a /\ (a -> b))%expr).
+      - solve_always.
+        destruct a; destruct b; reflexivity.
+      - eauto using whp_and.
+    Qed.
+  End WHPLemmas.
 
   Section Equality.
     Definition eqwhp {t} (e1 e2:expr t) : Prop := whp (e1 == e2).
@@ -1394,20 +1440,15 @@ Section Language.
     Global Instance Transitive_eqwhp {t} : Transitive (@eqwhp t).
     Proof.
       cbv [Transitive eqwhp]; intros ??? A B.
-      refine (whp_impl _ _ _ (whp_and _ _ (conj A B))).
-      cbv [always]; intros; cbn.
-      etransitivity; [eapply case_tbool|].
+      refine (whp_impl_dist _ _ _ (whp_and _ _ (conj A B))).
+
+      solve_always.
+
       repeat match goal with
-             | _ => solve [trivial]
-             | _ => setoid_rewrite interp_fimpl
-             | _ => setoid_rewrite interp_fand
-             | _ => setoid_rewrite interp_feqb
-             | _ => setoid_rewrite inspect_vtrue
-             | _ => setoid_rewrite inspect_vfalse
              | |- context [if ?a ?= ?b then _ else _] => destruct (a ?= b) eqn:?
              | H:_|-_ => rewrite eqb_leibniz in H; rewrite H in *; clear H
              | H:_|-_ => rewrite eqb_refl in H; discriminate H
-             | _ => progress cbn
+             | _ => solve_always; reflexivity
              end.
     Qed.
 
@@ -1947,30 +1988,6 @@ Section Language.
                end.
     Qed.
 
-    Lemma implb_true_r :
-      forall b, implb b true = true.
-    Proof. destruct b; eauto. Qed.
-
-    Lemma whp_true : whp (#vtrue).
-    Proof. cbv [whp]. reflexivity. Qed.
-
-    Lemma always_whp e : always e -> whp e.
-    Proof.
-      intros A.
-      eapply whp_impl with (a := expr_const vtrue).
-      - cbv [always].
-        intros.
-        eapply inspect_vbool_inj.
-        cbn [interp_fixed].
-        rewrite interp_fimpl.
-        rewrite inspect_vtrue at 1.
-        cbv [implb].
-        f_equal.
-        unfold always in A.
-        eauto.
-      - eapply whp_true.
-    Qed.
-
     (* TODO simplify this proof and abstract the tedium into a tactic *)
     (* A nonce scheme that always picks constant nonces is safe from reuse:
        In the formula
@@ -1988,62 +2005,28 @@ Section Language.
       intros C hole_dec NI h1 h2.
       destruct (hole_dec h1 h2).
       - subst h2.
-        eapply whp_impl with (a := (m h1 == m h1)%expr).
-        + cbv [always].
-          intros.
-          cbn [interp_fixed].
-          eapply inspect_vbool_inj.
-          repeat rewrite interp_fimpl.
-          destruct (inspect_vbool
-                      (interp_func
-                         feqb
-                         (interp_pair (interp_fixed (m h1) eta adv rands)
-                                      (interp_fixed (m h1) eta adv rands)))).
-          * rewrite inspect_vtrue.
-            rewrite <- leb_implb.
-            rewrite implb_true_r.
-            simpl.
-            eauto.
-          * simpl.
-            rewrite inspect_vtrue.
-            eauto.
-        + refine (Reflexive_eqwhp _).
-      - eapply whp_impl with (a := (~ n h1 == n h2)%expr).
-        + cbv [always].
-          intros.
-          cbn [interp_fixed].
-          eapply inspect_vbool_inj.
-          repeat rewrite interp_fimpl.
-          repeat rewrite interp_fnegb.
-          rewrite inspect_vtrue.
-          destruct (inspect_vbool
-                      (interp_func
-                         feqb
-                         (interp_pair (interp_fixed (n h1) eta adv rands)
-                                      (interp_fixed (n h2) eta adv rands)))).
-          * reflexivity.
-          * reflexivity.
-        (* Essentially nothing up to this point is
-           specific to this nonce-generation strategy. *)
-        + eapply always_whp.
-          cbv [always].
-          intros.
-          cbn [interp_fixed].
-          eapply inspect_vbool_inj.
-          rewrite interp_fnegb.
-          rewrite interp_feqb.
-          pose proof (eqb_leibniz (interp_fixed (n h1) eta adv rands)
-                                  (interp_fixed (n h2) eta adv rands)).
-          destruct (interp_fixed (n h1) eta adv rands
-                                 ?=
-                                 interp_fixed (n h2) eta adv rands).
-          * specialize (NI h1 h2 eta).
-            repeat rewrite C in H0.
-            cbn [interp_fixed] in H0.
-            intuition.
-          * rewrite inspect_vfalse.
-            rewrite inspect_vtrue.
-            eauto.
+        eapply always_whp.
+        solve_always.
+        repeat match goal with
+               | |- context [if ?a ?= ?b then _ else _] =>
+                 destruct (a ?= b) eqn:?
+               | H : _ = _ |- _ =>
+                 rewrite eqb_leibniz in H; rewrite H in *; clear H
+               | H : _ = _ |- _ => rewrite eqb_refl in H; discriminate H
+               | _ => solve_always; reflexivity
+               end.
+      - eapply always_whp.
+        solve_always.
+        repeat match goal with
+               | |- context [if ?a ?= ?b then _ else _] =>
+                 destruct (a ?= b) eqn:?
+               | H : _ = _ |- _ => rewrite eqb_leibniz in H
+               | H : context[n _] |- _ => rewrite C in H; cbv in H
+               | H : N _ _ = N _ _ |- _ =>
+                 apply NI in H; rewrite H in *; clear H
+               | H: _ = _ |- _ => rewrite eqb_refl in H; discriminate H
+               | _ => solve_always; try reflexivity
+               end.
     Qed.
   End Encrypt.
 
@@ -2167,9 +2150,16 @@ Section Language.
         (everything_ok, adv_out_2_msg).
 
       Lemma ex_pr1_mac : whp (checks_2 -> adv_out_msg == enc_out).
-        eapply whp_impl with
+        eapply whp_impl_dist with
             (a := (check_out -> expr_in adv_out_msg (enc_out :: nil))%expr).
-        - admit.
+        - unfold checks_2.
+          generalize check_out; intro CO.
+          unfold expr_in; cbn.
+          generalize (adv_out_msg == enc_out)%expr; intro E.
+          generalize prod_1_decode_ok; intro P1DO.
+          generalize dec_ok; intro DO.
+          solve_always.
+          destruct CO; destruct E; destruct P1DO; destruct DO; reflexivity.
         - cbv [check_out].
           eapply mac_correct.
 
@@ -2200,8 +2190,7 @@ Section Language.
           repeat econstructor.
           eapply mspair with (S1 := enc_out :: nil);
             repeat (eauto || econstructor).
-      Admitted.
-
+      Qed.
     End Protocol1Rewrite.
 
     Theorem example_proto_1_authenticity :

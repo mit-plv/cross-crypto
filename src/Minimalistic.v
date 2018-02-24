@@ -1736,6 +1736,8 @@ Section Language.
         whp (ve -> expr_in m S).
   End MAC.
 
+  Context {eq_len : (tmessage * tmessage -> tbool)%etype}.
+
   Section Encrypt.
     Context {tkey tnonce : type}.
     Context {keygen : (trand -> tkey)%etype}
@@ -1777,16 +1779,14 @@ Section Language.
     Definition no_nonce_reuse (sk : positive) {t} (e : expr t) : Prop :=
       forall n1 m1 n2 m2, encrypts sk n1 m1 e -> encrypts sk n2 m2 e -> whp (n1 == n2 -> m1 == m2).
 
-    (* Equality except for the input to encrypt *)
-    (* FIXME does not take into account the length of a message.
-       Or maybe I've been assuming messages are variable-length.
-       (See message-tupling.)
-       Either way something is very wrong. *)
+    (* Equality except for equal-length inputs to encrypt *)
     Inductive eq_mod_enc (sk : positive) : forall {t}, expr t -> expr t -> Prop :=
     | eqe_refl {t} e : @eq_mod_enc sk t e e
-    | eqe_encrypt n m m' : eq_mod_enc sk
-                                      (encrypt@(keygen@($sk), n, m ))
-                                      (encrypt@(keygen@($sk), n, m'))
+    | eqe_encrypt n m m' :
+        whp (eq_len@(m, m')) ->
+        eq_mod_enc sk
+                   (encrypt@(keygen@($sk), n, m ))
+                   (encrypt@(keygen@($sk), n, m'))
     (* boring recursion: *)
     | eqe_func {t1 t2} (f : func t1 t2) e e' : eq_mod_enc sk e e' -> eq_mod_enc sk (f@e) (f@e')
     | eqe_adv e e'                           : eq_mod_enc sk e e' -> eq_mod_enc sk (!@e) (!@e')
@@ -1931,6 +1931,7 @@ Section Language.
 
     Lemma fill_mod_enc :
       forall sk {hole} nonce msg1 msg2 {t} (eh : @enc_holes sk hole t),
+        (forall h, whp (eq_len@(msg1 h, msg2 h))) ->
         eq_mod_enc sk
                    (fill_enc_holes nonce msg1 eh)
                    (fill_enc_holes nonce msg2 eh).
@@ -1953,6 +1954,7 @@ Section Language.
                      exists h', n = nonce h' /\ m = msg2 h') ->
       (forall h1 h2, whp (nonce h1 == nonce h2 -> msg1 h1 == msg1 h2)) ->
       (forall h1 h2, whp (nonce h1 == nonce h2 -> msg2 h1 == msg2 h2)) ->
+      (forall h, whp (eq_len@(msg1 h, msg2 h))) ->
       confidentiality_conclusion ->
       indist (fill_enc_holes nonce msg1 eh)
              (fill_enc_holes nonce msg2 eh).
@@ -1967,7 +1969,6 @@ Section Language.
                end.
     Qed.
 
-    (* TODO simplify this proof and abstract the tedium into a tactic *)
     (* A nonce scheme that always picks constant nonces is safe from reuse:
        In the formula
            whp (nonce_i = nonce_j -> message_i = message_j)
@@ -1987,8 +1988,7 @@ Section Language.
         eapply always_whp.
         solve_always.
         repeat match goal with
-               | |- context [?a ?= ?b] =>
-                 destruct (a ?= b) eqn:?
+               | |- context [?a ?= ?b] => destruct (a ?= b) eqn:?
                | H : _ = _ |- _ =>
                  rewrite eqb_leibniz in H; rewrite H in *; clear H
                | H : _ = _ |- _ => rewrite eqb_refl in H; discriminate H
@@ -2011,6 +2011,7 @@ Section Language.
 
   Section ExampleProtocol1.
     Context {tsignature tskey tpkey : type}.
+
     Context {skeygen : (trand -> tskey)%etype} (* secret key generation  *)
             {pkeygen : (tskey -> tpkey)%etype} (* public part of key *)
             {sign : (tskey * tmessage -> tsignature)%etype}
@@ -2067,7 +2068,7 @@ Section Language.
 
     Section Protocol1Rewrite.
       (* FIXME lots of definitions here get leaked.  It's nice to be
-         able t oalk about them outside this section for proving things
+         able to talk about them outside this section for proving things
          about them, so the best thing to do here may be to move the
          whole thing inside its own module later. *)
 

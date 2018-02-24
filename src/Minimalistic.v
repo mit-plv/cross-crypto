@@ -330,8 +330,8 @@ Section Language.
   Local Notation "a == b" := (feqb@(a, b)) : expr_scope.
   Arguments feqb {_}.
   Context (interp_feqb : forall t eta (v1 v2:interp_type t eta),
-              interp_func feqb (interp_pair v1 v2) =
-              if eqb v1 v2 then vtrue eta else vfalse eta).
+              inspect_vbool (interp_func feqb (interp_pair v1 v2))
+              = eqb v1 v2).
 
   Context (fand : (tbool * tbool -> tbool)%etype)
           (interp_fand : forall eta v1 v2,
@@ -353,6 +353,17 @@ Section Language.
               inspect_vbool (interp_func fnegb v) =
               negb (inspect_vbool (eta:=eta) v)).
   Local Notation "~ a" := (fnegb@a) : expr_scope.
+  Context (ite : forall t, (tbool * t * t -> t)%etype).
+  Arguments ite {_}.
+  Context (interp_ite :
+             forall t eta b (v1 v2:interp_type t eta),
+               interp_func ite (interp_pair (interp_pair b v1) v2) =
+               if inspect_vbool b then v1 else v2).
+  Arguments interp_ite {_ _}.
+  Local Notation "'eif' b 'then' x 'else' y" := (ite@(b,x,y))
+                                                  (at level 200, b at level 1000, x at level 1000, y at level 1000,
+                                                   format "'[' '[  ' 'eif'  b  'then' '/' x ']' '/' '[  ' 'else' '/' y ']' ']'")
+                                                : expr_scope.
 
   Section TBool.
     Definition tbool_rect eta
@@ -394,9 +405,11 @@ Section Language.
   Hint Rewrite interp_fand : push_interp.
   Hint Rewrite interp_f_or : push_interp.
   Hint Rewrite interp_fimpl : push_interp.
+  Hint Rewrite interp_fnegb : push_interp.
   Hint Rewrite interp_feqb : push_interp.
   Hint Rewrite inspect_vtrue : push_interp.
   Hint Rewrite inspect_vfalse : push_interp.
+  Hint Rewrite @interp_ite : push_interp.
 
   Ltac solve_always' :=
     repeat match goal with
@@ -1401,54 +1414,42 @@ Section Language.
 
     Global Instance Reflexive_eqwhp {t} : Reflexive (@eqwhp t).
     Proof.
-      cbv [Reflexive indist universal_security_game eqwhp whp interp]; intros.
-      cbn [interp_fixed].
-      (* TODO: report inlined setoid rewrite *)
-      eapply Proper_negligible.
-      {
-        intro eta.
-        setoid_rewrite interp_feqb.
-        setoid_rewrite eqb_refl.
-        setoid_rewrite Bind_unused.
-        eapply reflexivity.
-      }
-      setoid_rewrite ratDistance_same.
-      eapply negligible_0.
+      cbv [Reflexive indist universal_security_game eqwhp]; intros.
+      eapply always_whp.
+      solve_always.
+      eapply eqb_refl.
     Qed.
 
     Global Instance Symmetric_eqwhp {t} : Symmetric (@eqwhp t).
     Proof.
-      cbv [Symmetric indist universal_security_game eqwhp whp interp]; intros.
-      cbn [interp_fixed] in *.
-      (* TODO: report inlined setoid rewrite *)
-      eapply Proper_negligible.
-      {
-        intro eta.
-
-        setoid_rewrite interp_feqb.
-        setoid_rewrite eqb_symm.
-        setoid_rewrite <-interp_feqb.
-
-        cbn [randomness_indices].
-        setoid_rewrite PositiveSetProperties.union_sym.
-
-        eapply reflexivity.
-      }
-      eapply H.
+      cbv [Symmetric indist universal_security_game eqwhp].
+      intros x y.
+      eapply whp_impl.
+      eapply always_whp.
+      solve_always.
+      repeat match goal with
+             | |- context [?a ?= ?b] => destruct (a ?= b) eqn:?
+             | H:_|-_ => rewrite eqb_leibniz in H; rewrite H in *; clear H
+             | H:_|-_ => rewrite eqb_refl in H; discriminate H
+             | _ => reflexivity
+             end.
     Qed.
 
     Global Instance Transitive_eqwhp {t} : Transitive (@eqwhp t).
     Proof.
-      cbv [Transitive eqwhp]; intros ??? A B.
-      refine (whp_impl_dist _ _ _ (whp_and _ _ (conj A B))).
-
+      cbv [Transitive eqwhp].
+      intros x y z.
+      intro H.
+      eapply whp_impl.
+      revert H.
+      eapply whp_impl.
+      eapply always_whp.
       solve_always.
-
       repeat match goal with
-             | |- context [if ?a ?= ?b then _ else _] => destruct (a ?= b) eqn:?
+             | |- context [?a ?= ?b] => destruct (a ?= b) eqn:?
              | H:_|-_ => rewrite eqb_leibniz in H; rewrite H in *; clear H
              | H:_|-_ => rewrite eqb_refl in H; discriminate H
-             | _ => solve_always; reflexivity
+             | _ => reflexivity
              end.
     Qed.
 
@@ -1593,32 +1594,12 @@ Section Language.
 
   (* TODO: do we need explicit substitution to define [interact]? *)
 
-  Context (ite : forall t, (tbool * t * t -> t)%etype).
-  Arguments ite {_}.
-  Context (interp_ite : forall t eta b (v1 v2:interp_type t eta), interp_func ite (interp_pair (interp_pair b v1) v2) = if inspect_vbool b then v1 else v2).
-  Arguments interp_ite {_ _}.
-
-  Local Notation "'eif' b 'then' x 'else' y" := (ite@(b,x,y))
-                                                  (at level 200, b at level 1000, x at level 1000, y at level 1000,
-                                                   format "'[' '[  ' 'eif'  b  'then' '/' x ']' '/' '[  ' 'else' '/' y ']' ']'")
-                                                : expr_scope.
-
   Lemma if_same b t (e:expr t) : eqwhp (eif b then e else e) e.
   Proof.
-    cbv [eqwhp whp indist universal_security_game interp]; intros.
-    cbn [interp_fixed].
-    eapply Proper_negligible; [intro eta|].
-    {
-      setoid_rewrite interp_feqb.
-      setoid_rewrite interp_ite.
-      assert (if_same : forall (x:bool) {T} (Y:T), (if x then Y else Y) = Y) by (destruct x; reflexivity).
-      setoid_rewrite if_same at 1.
-      setoid_rewrite eqb_refl.
-      setoid_rewrite Bind_unused.
-      eapply reflexivity.
-    }
-    setoid_rewrite ratDistance_same.
-    eapply negligible_0.
+    cbv [eqwhp].
+    eapply always_whp.
+    solve_always.
+    destruct b; rewrite eqb_refl; reflexivity.
   Qed.
 
   Context (vmessage_exists : forall eta, interp_type tmessage eta).
@@ -1659,38 +1640,36 @@ Section Language.
     eapply not_negligible_const; eauto using rat1_ne_rat0.
   Qed.
 
-  Lemma if_true t (e1 e2:expr t) : eqwhp (eif #vtrue then e1 else e2) e1.
+  Lemma if_whp_true t (b : expr tbool) (e1 e2:expr t) :
+    whp b -> eqwhp (eif b then e1 else e2) e1.
   Proof.
-    cbv [eqwhp whp indist universal_security_game interp]; intros.
-    cbn [interp_fixed].
-    eapply Proper_negligible; [intro eta|].
-    {
-      setoid_rewrite interp_ite.
-      setoid_rewrite inspect_vtrue.
-      setoid_rewrite interp_feqb.
-      setoid_rewrite eqb_refl.
-      setoid_rewrite Bind_unused.
-      eapply reflexivity.
-    }
-    setoid_rewrite ratDistance_same.
-    eapply negligible_0.
+    eapply whp_impl.
+    eapply always_whp.
+    solve_always.
+    destruct b; eauto using eqb_refl.
   Qed.
 
-  Lemma if_false t (e1 e2:expr t) : eqwhp (eif #vfalse then e1 else e2) e2.
+  Corollary if_true t (e1 e2:expr t) : eqwhp (eif #vtrue then e1 else e2) e1.
   Proof.
-    cbv [eqwhp whp indist universal_security_game interp]; intros.
-    cbn [interp_fixed].
-    eapply Proper_negligible; [intro eta|].
-    {
-      setoid_rewrite interp_ite.
-      setoid_rewrite inspect_vfalse.
-      setoid_rewrite interp_feqb.
-      setoid_rewrite eqb_refl.
-      setoid_rewrite Bind_unused.
-      eapply reflexivity.
-    }
-    setoid_rewrite ratDistance_same.
-    eapply negligible_0.
+    eapply if_whp_true.
+    eapply whp_true.
+  Qed.
+
+  Lemma if_whp_false t (b : expr tbool) (e1 e2:expr t) :
+    whp (~b) -> eqwhp (eif b then e1 else e2) e2.
+  Proof.
+    eapply whp_impl.
+    eapply always_whp.
+    solve_always.
+    destruct b; cbn; eauto using eqb_refl.
+  Qed.
+
+  Corollary if_false t (e1 e2:expr t) : eqwhp (eif #vfalse then e1 else e2) e2.
+  Proof.
+    eapply if_whp_false.
+    eapply always_whp.
+    solve_always.
+    reflexivity.
   Qed.
 
   Definition expr_in {t} (x : expr t) : list (expr t) -> expr tbool :=
@@ -2008,7 +1987,7 @@ Section Language.
         eapply always_whp.
         solve_always.
         repeat match goal with
-               | |- context [if ?a ?= ?b then _ else _] =>
+               | |- context [?a ?= ?b] =>
                  destruct (a ?= b) eqn:?
                | H : _ = _ |- _ =>
                  rewrite eqb_leibniz in H; rewrite H in *; clear H
@@ -2018,7 +1997,7 @@ Section Language.
       - eapply always_whp.
         solve_always.
         repeat match goal with
-               | |- context [if ?a ?= ?b then _ else _] =>
+               | |- context [?a ?= ?b] =>
                  destruct (a ?= b) eqn:?
                | H : _ = _ |- _ => rewrite eqb_leibniz in H
                | H : context[n _] |- _ => rewrite C in H; cbv in H

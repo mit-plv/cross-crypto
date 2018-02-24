@@ -2017,7 +2017,9 @@ Section Language.
             {sign : (tskey * tmessage -> tsignature)%etype}
             {sverify : (tpkey * tmessage * tsignature -> tbool)%etype}.
 
-    Context {signature_correct : forall (sk : positive) (m : expr tmessage) (s : expr tsignature), @signature_conclusion tsignature tskey tpkey skeygen pkeygen sign sverify}.
+    Context {signature_correct :
+               @signature_conclusion
+                 tsignature tskey tpkey skeygen pkeygen sign sverify}.
 
     Context {tkey tnonce : type}
             {ekeygen : (trand -> tkey)%etype}
@@ -2053,7 +2055,7 @@ Section Language.
     Arguments fcons {_}.
 
     Context {prod_encode : (tmessage * tmessage -> tmessage)%etype}
-            {prod_decode : (tmessage -> tbool * tmessage * tmessage)%etype}.
+            {prod_decode : (tmessage -> tmessage * tmessage)%etype}.
 
     Context {ffst : forall t1 t2, (t1 * t2 -> t1)%etype}
             {fsnd : forall t1 t2, (t1 * t2 -> t2)%etype}.
@@ -2093,8 +2095,7 @@ Section Language.
       Definition net_in_1 := fcons@(enc_out, fcons@(mmac_out, #cnil)).
       Definition adv_out_1 := !@net_in_1.
       Definition adv_out_1_tup := prod_decode@adv_out_1.
-      Definition prod_1_decode_ok := ffst@(ffst@adv_out_1_tup).
-      Definition adv_out_msg := fsnd@(ffst@adv_out_1_tup).
+      Definition adv_out_msg := ffst@adv_out_1_tup.
       Definition adv_out_mmac := fsnd@adv_out_1_tup.
       Definition adv_out_mac := message2mac@adv_out_mmac.
       Definition check_out := mverify@(sk2, adv_out_msg, adv_out_mac).
@@ -2109,7 +2110,7 @@ Section Language.
       Definition sign_out := sign@(sK', msg).
       Definition sign_out_m := signature2message@sign_out.
 
-      Definition checks_2 := (prod_1_decode_ok /\ check_out /\ dec_ok)%expr.
+      Definition checks_2 := (check_out /\ dec_ok)%expr.
       Definition net_in_good := fcons@(sign_out_m, fcons@(msg, net_in_1)).
       Definition net_in_2 := (eif checks_2
                               then net_in_good
@@ -2117,17 +2118,14 @@ Section Language.
 
       Definition adv_out_2 := !@net_in_2.
       Definition adv_out_2_tup := prod_decode@adv_out_2.
-      Definition prod_2_decode_ok := ffst@(ffst@adv_out_2_tup).
-      Definition adv_out_2_msg := fsnd@(ffst@adv_out_2_tup).
+      Definition adv_out_2_msg := ffst@adv_out_2_tup.
       Definition adv_out_2_sig_m := fsnd@adv_out_2_tup.
       Definition adv_out_2_sig := message2signature@adv_out_2_sig_m.
       Definition pK := pkeygen@sK.
       Definition verify_out := sverify@(pK, adv_out_2_msg, adv_out_2_sig).
 
-      Definition everything_ok := (prod_2_decode_ok /\ verify_out)%expr.
-
       Definition ok_msg : expr (tbool * tmessage) :=
-        (everything_ok, adv_out_2_msg).
+        (verify_out, adv_out_2_msg).
 
       Lemma ex_pr1_mac : whp (checks_2 -> adv_out_msg == enc_out).
         eapply whp_impl_dist with
@@ -2136,10 +2134,9 @@ Section Language.
           generalize check_out; intro CO.
           unfold expr_in; cbn.
           generalize (adv_out_msg == enc_out)%expr; intro E.
-          generalize prod_1_decode_ok; intro P1DO.
           generalize dec_ok; intro DO.
           solve_always.
-          destruct CO; destruct E; destruct P1DO; destruct DO; reflexivity.
+          destruct CO; destruct E; destruct DO; reflexivity.
         - cbv [check_out].
           eapply mac_correct.
 

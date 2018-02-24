@@ -1453,14 +1453,53 @@ Section Language.
              end.
     Qed.
 
-    Global Instance Proper_eqwhp_pair {t1 t2} : Proper (eqwhp ==> eqwhp ==> eqwhp) (@expr_pair t1 t2).
-    Admitted.
+    Global Instance Proper_eqwhp_pair {t1 t2} :
+      Proper (eqwhp ==> eqwhp ==> eqwhp) (@expr_pair t1 t2).
+    Proof.
+      intros ?? Hx ??.
+      eapply whp_impl.
+      revert Hx.
+      eapply whp_impl.
+      eapply always_whp.
+      solve_always.
+      repeat match goal with
+             | |- context [?a ?= ?b] => destruct (a ?= b) eqn:?
+             | H : _ = _ |- _ =>
+               rewrite eqb_leibniz in H; rewrite H in *; clear H
+             | H : _ = _ |- _ => rewrite eqb_refl in H; discriminate H
+             | _ => reflexivity
+             end.
+    Qed.
 
     Global Instance Proper_eqwhp_adversarial : Proper (eqwhp ==> eqwhp) expr_adversarial.
-    Admitted.
+    Proof.
+      intros ??.
+      eapply whp_impl.
+      eapply always_whp.
+      solve_always.
+      repeat match goal with
+             | |- context [?a ?= ?b] => destruct (a ?= b) eqn:?
+             | H : _ = _ |- _ =>
+               rewrite eqb_leibniz in H; rewrite H in *; clear H
+             | H : _ = _ |- _ => rewrite eqb_refl in H; discriminate H
+             | _ => reflexivity
+             end.
+    Qed.
 
     Global Instance Proper_eqwhp_func {t1 t2} f : Proper (eqwhp ==> eqwhp) (@expr_app t1 t2 f).
-    Admitted.
+    Proof.
+      intros ??.
+      eapply whp_impl.
+      eapply always_whp.
+      solve_always.
+      repeat match goal with
+             | |- context [?a ?= ?b] => destruct (a ?= b) eqn:?
+             | H : _ = _ |- _ =>
+               rewrite eqb_leibniz in H; rewrite H in *; clear H
+             | H : _ = _ |- _ => rewrite eqb_refl in H; discriminate H
+             | _ => reflexivity
+             end.
+    Qed.
   End Equality.
 
   Section LateInterp.

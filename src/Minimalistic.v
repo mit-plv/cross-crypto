@@ -8,7 +8,7 @@ Require Import Lia. (* TODO: remove after removing not_negligible_const *)
 Section Language.
   Context {type  : Set} {eqdec_type : EqDec type}
           {interp_type : type -> nat -> Set} {eqdec_interp_type : forall {t eta}, EqDec (interp_type t eta)}
-          {tbool trand tmessage : type} {tlist : type -> type} {tprod : type -> type -> type}.
+          {tbool trand : type} {tprod : type -> type -> type}.
   Context {func : type -> type -> Set}.
 
   Bind Scope etype_scope with type.
@@ -1716,7 +1716,8 @@ Section Language.
     (fold_right (fun m acc => x == m \/ acc)%expr #vfalse)%expr.
 
   Section Signature.
-    Context {tsignature tskey tpkey : type}
+    Context {tmessage : type}
+            {tsignature tskey tpkey : type}
             {skeygen : (trand -> tskey)%etype} (* secret key generation  *)
             {pkeygen : (tskey -> tpkey)%etype} (* public part of key *)
             {sign : (tskey * tmessage -> tsignature)%etype}
@@ -1748,8 +1749,9 @@ Section Language.
   End Signature.
 
   Section MAC.
-    Context {tmac tkey : type}.
-    Context {keygen : (trand -> tkey)%etype} (* key generation  *)
+    Context {tmessage : type}
+            {tmac tkey : type}
+            {keygen : (trand -> tkey)%etype} (* key generation  *)
             {mac : (tkey * tmessage -> tmac)%etype}
             {verify : (tkey * tmessage * tmac -> tbool)%etype}.
 
@@ -1776,11 +1778,12 @@ Section Language.
         whp (ve -> expr_in m S).
   End MAC.
 
-  Context {eq_len : (tmessage * tmessage -> tbool)%etype}.
 
   Section Encrypt.
-    Context {tkey tnonce : type}.
-    Context {keygen : (trand -> tkey)%etype}
+    Context {tmessage : type}
+            {eq_len : (tmessage * tmessage -> tbool)%etype}
+            {tkey tnonce : type}
+            {keygen : (trand -> tkey)%etype}
             {encrypt : (tkey * tnonce * tmessage -> tmessage)%etype}.
 
     (* The secret key is used only as the input to encrypt *)
@@ -1850,8 +1853,7 @@ Section Language.
     Inductive enc_holes (sk : positive) {hole : Type} : type -> Type :=
     | ench_const {t} (_:forall eta, interp_type t eta) : enc_holes sk t
     | ench_random (idx:positive) : idx <> sk -> enc_holes sk trand
-    | ench_adversarial (_:enc_holes sk (tlist tmessage)) :
-        enc_holes sk tmessage
+    | ench_adversarial t1 t2 (_:enc_holes sk t1) : enc_holes sk t2
     | ench_func {t1 t2} (_:func t1 t2) (_:enc_holes sk t1) :
         enc_holes sk t2
     | ench_pair {t1 t2} (_:enc_holes sk t1) (_:enc_holes sk t2) :
@@ -1865,7 +1867,7 @@ Section Language.
       match eh with
       | ench_const _ x => #x
       | ench_random _ idx _ => $idx
-      | ench_adversarial _ eh' => !@(fill_enc_holes nonce message eh')
+      | ench_adversarial _ t1 t2 eh' => !t2@(fill_enc_holes nonce message eh')
       | ench_func _ f      eh' => f@(fill_enc_holes nonce message eh')
       | ench_pair _ eh1 eh2 => (fill_enc_holes nonce message eh1, fill_enc_holes nonce message eh2)
       | ench_encrypt _ h => encrypt@(keygen@($sk), nonce h, message h)
@@ -2050,6 +2052,8 @@ Section Language.
   End Encrypt.
 
   Section ExampleProtocol1.
+    Context {tmessage : type}
+            {eq_len : (tmessage * tmessage -> tbool)%etype}.
     Context {tsignature tskey tpkey : type}.
 
     Context {skeygen : (trand -> tskey)%etype} (* secret key generation  *)
@@ -2059,6 +2063,7 @@ Section Language.
 
     Context {signature_correct :
                @signature_conclusion
+                 tmessage
                  tsignature tskey tpkey skeygen pkeygen sign sverify}.
 
     Context {tkey tnonce : type}
@@ -2067,7 +2072,7 @@ Section Language.
             {decrypt : (tkey * tmessage -> tbool * tmessage)%etype}.
 
     Context {confidentiality :
-               @confidentiality_conclusion tkey tnonce ekeygen encrypt}.
+               @confidentiality_conclusion tmessage eq_len tkey tnonce ekeygen encrypt}.
 
     Context {tmac tmkey : type}
             {mkeygen : (trand -> tmkey)%etype}
@@ -2075,7 +2080,7 @@ Section Language.
             {mverify : (tmkey * tmessage * tmac -> tbool)%etype}.
 
     Context {mac_correct :
-               @mac_conclusion tmac tmkey mkeygen mac mverify}.
+               @mac_conclusion tmessage tmac tmkey mkeygen mac mverify}.
 
     Context {skey2message : (tskey -> tmessage)%etype}
             {message2skey : (tmessage -> tskey)%etype}
@@ -2088,8 +2093,8 @@ Section Language.
 
     (* constant nonce *)
     Context {N : forall eta, interp_type tnonce eta}.
-
-    Context {cnil : forall t eta, interp_type (tlist t) eta}
+    Context  {tlist : type -> type}
+             {cnil : forall t eta, interp_type (tlist t) eta}
             {fcons : forall t, (t * tlist t -> tlist t)%etype}.
     Arguments cnil {_}.
     Arguments fcons {_}.
@@ -2180,7 +2185,7 @@ Section Language.
         - cbv [check_out].
           eapply mac_correct.
 
-          assert (@mac_safe tmac tmkey mkeygen mac mverify skn2 _ enc_out nil)
+          assert (@mac_safe tmessage tmac tmkey mkeygen mac mverify skn2 _ enc_out nil)
             as enc_out_mac_safe.
           {
             repeat match goal with

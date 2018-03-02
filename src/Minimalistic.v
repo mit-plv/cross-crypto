@@ -19,7 +19,7 @@ Section Language.
   Inductive expr : type -> Type :=
   | expr_const {t} (_:forall eta, interp_type t eta) : expr t
   | expr_random (idx:positive) : expr trand
-  | expr_adversarial (_:expr (tlist tmessage)) : expr tmessage
+  | expr_adversarial {t1 t2} (_:expr t1) : expr t2
   | expr_app {t1 t2} (_:(t1 -> t2)%etype) (_:expr t1) : expr t2
   | expr_pair {t1 t2} (_:expr t1) (_:expr t2) : expr (t1 * t2).
 
@@ -28,8 +28,9 @@ Section Language.
 
   Local Notation "'#' x" := (expr_const x) (right associativity, at level 9, format "# x") : expr_scope.
   Local Notation "'$' x" := (expr_random x%positive) (right associativity, at level 79, x at next level, format "$ x") : expr_scope. (* FIXME: we want level 9, but it conflicts with fcf *)
-  Local Notation "'!' '@' x" := (expr_adversarial x%expr) (left associativity, at level 11, format "! @ x").
   Local Notation "f @ x" := (expr_app f x) (left associativity, at level 11, format "f @ x").
+  Local Notation "'!' '@' x" := (expr_adversarial x%expr) (left associativity, at level 11, format "! @ x").
+  Local Notation "'!' t '@' x" := (@expr_adversarial _ t x%expr) (left associativity, at level 11, format "! t @ x", t at next level).
   Local Notation "( x , y , .. , z )" := (expr_pair .. (expr_pair x%expr y%expr) .. z%expr) : expr_scope.
 
   Fixpoint randomness_indices {t:type} (e:expr t) : PositiveSet.t :=
@@ -245,13 +246,13 @@ Section Language.
   Arguments interp_pair {_ _ _}.
 
   Fixpoint interp_fixed {t} (e:expr t) (eta : nat)
-           (adv: interp_type (tlist tmessage) eta -> interp_type tmessage eta)
+           (adv: forall t1 t2, interp_type t1 eta -> interp_type t2 eta)
            (rands: PositiveMap.t (interp_type trand eta))
     : interp_type t eta :=
     match e with
     | # c => c eta
     | $ i => match PositiveMap.find i rands with Some r => r | _ => cast_rand eta (Bvector_exists _) end
-    | !@inputs => adv (interp_fixed inputs eta adv rands)
+    | !@inputs => adv _ _ (interp_fixed inputs eta adv rands)
     | f@inputs => interp_func f (interp_fixed inputs eta adv rands)
     | (a, b) => interp_pair (interp_fixed a eta adv rands) (interp_fixed b eta adv rands)
     end%expr.
@@ -273,11 +274,11 @@ Section Language.
     (* the adversary is split into three parts for no particular reason. It first decides how much randomness it will need, then interacts with the protocol (repeated calls to [adversary] with all messages up to now as input), and then tries to claim victory ([distinguisher]). There is no explicit sharing of state between these procedures, but all of them get the same random inputs in the security game. The handling of state is a major difference between FCF [OracleComp] and this framework *)
     Definition universal_security_game {t}
                (evil_rand_indices: forall eta:nat, PositiveSet.t)
-               (adversary:forall (eta:nat) (rands: PositiveMap.t (interp_type trand eta)), interp_type (tlist tmessage) eta -> interp_type tmessage eta)
+               (adv:forall (eta:nat) (rands: PositiveMap.t (interp_type trand eta)) t1 t2, interp_type t1 eta -> interp_type t2 eta)
                (distinguisher: forall (eta:nat) (rands: PositiveMap.t (interp_type trand eta)), interp_type t eta -> Datatypes.bool)
                (eta:nat) (e:expr t) : Comp Datatypes.bool :=
       evil_rands <-$ generate_randomness eta (evil_rand_indices eta);
-        out <-$ interp e eta (adversary eta (evil_rands));
+        out <-$ interp e eta (adv eta (evil_rands));
         ret (distinguisher eta evil_rands out).
 
     Definition indist {t:type} (a b:expr t) : Prop :=  forall adl adv dst,
@@ -1471,7 +1472,7 @@ Section Language.
              end.
     Qed.
 
-    Global Instance Proper_eqwhp_adversarial : Proper (eqwhp ==> eqwhp) expr_adversarial.
+    Global Instance Proper_eqwhp_adversarial {t1 t2} : Proper (eqwhp ==> eqwhp) (@expr_adversarial t1 t2).
     Proof.
       intros ??.
       eapply whp_impl.
@@ -1505,7 +1506,7 @@ Section Language.
   Section LateInterp.
     Fixpoint interp_late
              {t} (e:expr t) (eta : nat)
-             (adv: interp_type (tlist tmessage) eta -> interp_type tmessage eta)
+             (adv: forall t1 t2, interp_type t1 eta -> interp_type t2 eta)
              (fixed_rand: PositiveMap.t (interp_type trand eta))
     : Comp (interp_type t eta) :=
       match e with
@@ -1516,7 +1517,7 @@ Section Language.
         | _ => r <-$ {0,1}^eta; ret (cast_rand eta r)
         end
       | !@ctx =>
-        ctx <-$ interp_late ctx eta adv fixed_rand; ret (adv ctx)
+        ctx <-$ interp_late ctx eta adv fixed_rand; ret (adv _ _ ctx)
       | f@x =>
         x <-$ interp_late x eta adv fixed_rand; ret (interp_func f x)
       | (a, b) =>
@@ -1641,7 +1642,7 @@ Section Language.
     destruct b; rewrite eqb_refl; reflexivity.
   Qed.
 
-  Context (vmessage_exists : forall eta, interp_type tmessage eta).
+  Context (inhabited : forall t eta, interp_type t eta).
 
   (* TODO: contribute to FCF *)
   Lemma not_negligible_const c (Hc: ~ c == 0) : ~ negligible (fun _ => c).
@@ -1666,7 +1667,7 @@ Section Language.
     cbv [indist universal_security_game interp].
     intro H.
     specialize (H (fun _ => PositiveSet.empty)
-                  (fun _ _ _ => (vmessage_exists _))
+                  (fun n _ _ t _ => inhabited t n)
                   (fun eta rands v => inspect_vbool v)).
     cbv [id] in *.
     setoid_rewrite Bind_unused in H.
@@ -1728,7 +1729,7 @@ Section Language.
     (* boring recursion: *)
     | ssconst t v : @signature_safe sk t #v nil
     | ssfunc {t1 t2} (f : func t1 t2) e S : signature_safe sk e S -> signature_safe sk (f@e) S
-    | ssadv                           e S : signature_safe sk e S -> signature_safe sk (!@e) S
+    | ssadv  {t1 t2} (e : expr t1) S : signature_safe sk e S -> signature_safe sk (!t2@e) S
     | sspair {t1 t2} (e1: expr t1) (e2: expr t2) S1 S2 :
         signature_safe sk e1 S1 ->
         signature_safe sk e2 S2 ->
@@ -1759,7 +1760,7 @@ Section Language.
     (* boring recursion: *)
     | msconst t v : @mac_safe sk t #v nil
     | msfunc {t1 t2} (f : func t1 t2) e S : mac_safe sk e S -> mac_safe sk (f@e) S
-    | msadv                           e S : mac_safe sk e S -> mac_safe sk (!@e) S
+    | msadv  {t1 t2} (e : expr t1) S : mac_safe sk e S -> mac_safe sk (!t2@e) S
     | mspair {t1 t2} (e1: expr t1) (e2: expr t2) S1 S2 :
         mac_safe sk e1 S1 ->
         mac_safe sk e2 S2 ->
@@ -1792,7 +1793,7 @@ Section Language.
     (* boring recursion: *)
     | esconst t v : @encrypt_safe sk t #v
     | esfunc {t1 t2} (f : func t1 t2) e : encrypt_safe sk e -> encrypt_safe sk (f@e)
-    | esadv                           e : encrypt_safe sk e -> encrypt_safe sk (!@e)
+    | esadv  {t1 t2} (e : expr t1) : encrypt_safe sk e -> encrypt_safe sk (!t2@e)
     | espair {t1 t2} (e1: expr t1) (e2: expr t2) :
         encrypt_safe sk e1 ->
         encrypt_safe sk e2 ->
@@ -1805,7 +1806,7 @@ Section Language.
     | encs_encrypt : encrypts sk n m (encrypt@(keygen@($sk), n, m))
     (* boring recursion: *)
     | encs_func {t1 t2} (f : func t1 t2) e : encrypts sk n m e -> encrypts sk n m (f@e)
-    | encs_adv                           e : encrypts sk n m e -> encrypts sk n m (!@e)
+    | encs_adv  {t1 t2} (e : expr t1) : encrypts sk n m e -> encrypts sk n m (!t2@e)
     | encs_pair_l {t1 t2} (e1 : expr t1) (e2 : expr t2) :
         encrypts sk n m e1 -> encrypts sk n m (e1, e2)
     | encs_pair_r {t1 t2} (e1 : expr t1) (e2 : expr t2) :
@@ -1828,7 +1829,7 @@ Section Language.
                    (encrypt@(keygen@($sk), n, m'))
     (* boring recursion: *)
     | eqe_func {t1 t2} (f : func t1 t2) e e' : eq_mod_enc sk e e' -> eq_mod_enc sk (f@e) (f@e')
-    | eqe_adv e e'                           : eq_mod_enc sk e e' -> eq_mod_enc sk (!@e) (!@e')
+    | eqe_adv {t1 t2} (e e' : expr t1) : eq_mod_enc sk e e' -> eq_mod_enc sk (!t2@e) (!t2@e')
     | eqe_pair {t1 t2} (e1 e1' : expr t1) (e2 e2' : expr t2) :
         eq_mod_enc sk e1 e1' ->
         eq_mod_enc sk e2 e2' ->
@@ -1888,7 +1889,7 @@ Section Language.
       (forall h, encrypt_safe sk (message h)) ->
       (forall {t} x, @P t (#x)%expr) -> (* WHY do we need a scope annotation here *)
       (forall idx, idx <> sk -> P ($idx)%expr) -> (* and here? *)
-      (forall e', P e' ->  P (!@e')) ->
+      (forall t1 t2 (e' : expr t1), P e' ->  P (!t2@e')) ->
       (forall t1 t2 (f : func t1 t2) e', encrypt_safe sk e' -> P e' -> P (f@e')) ->
       (forall t1 e1 t2 e2, @P t1 e1 -> @P t2 e2 -> P (e1, e2)%expr) -> (* and here? *)
       (forall h, P (encrypt@(keygen@($sk), nonce h, message h))) ->
@@ -2132,7 +2133,7 @@ Section Language.
       Definition mac_out := mac@(sk2, enc_out).
       Definition mmac_out := mac2message@mac_out.
       Definition net_in_1 := fcons@(enc_out, fcons@(mmac_out, #cnil)).
-      Definition adv_out_1 := !@net_in_1.
+      Definition adv_out_1 := !tmessage@net_in_1.
       Definition adv_out_1_tup := prod_decode@adv_out_1.
       Definition adv_out_msg := ffst@adv_out_1_tup.
       Definition adv_out_mmac := fsnd@adv_out_1_tup.
@@ -2155,7 +2156,7 @@ Section Language.
                               then net_in_good
                               else fcons@(#complaint, net_in_1))%expr.
 
-      Definition adv_out_2 := !@net_in_2.
+      Definition adv_out_2 := !tmessage@net_in_2.
       Definition adv_out_2_tup := prod_decode@adv_out_2.
       Definition adv_out_2_msg := ffst@adv_out_2_tup.
       Definition adv_out_2_sig_m := fsnd@adv_out_2_tup.

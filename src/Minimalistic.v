@@ -7,7 +7,9 @@ Require Import Lia. (* TODO: remove after removing not_negligible_const *)
 
 Section Language.
   Context {type  : Set} {eqdec_type : EqDec type}
-          {interp_type : type -> nat -> Set} {eqdec_interp_type : forall {t eta}, EqDec (interp_type t eta)}
+          {interp_type : type -> nat -> Set}
+          {eqdec_interp_type : forall {t eta}, EqDec (interp_type t eta)}
+          {interp_type_inhabited : forall t eta, interp_type t eta}
           {tbool trand : type} {tprod : type -> type -> type}.
   Context {func : type -> type -> Set}.
 
@@ -32,6 +34,7 @@ Section Language.
   Local Notation "'!' '@' x" := (expr_adversarial x%expr) (left associativity, at level 11, format "! @ x").
   Local Notation "'!' t '@' x" := (@expr_adversarial _ t x%expr) (left associativity, at level 11, format "! t @ x", t at next level).
   Local Notation "( x , y , .. , z )" := (expr_pair .. (expr_pair x%expr y%expr) .. z%expr) : expr_scope.
+  Local Notation "'#!'" := (expr_const (interp_type_inhabited _)) : expr_scope.
 
   Fixpoint randomness_indices {t:type} (e:expr t) : PositiveSet.t :=
     match e with
@@ -1642,8 +1645,6 @@ Section Language.
     destruct b; rewrite eqb_refl; reflexivity.
   Qed.
 
-  Context (inhabited : forall t eta, interp_type t eta).
-
   (* TODO: contribute to FCF *)
   Lemma not_negligible_const c (Hc: ~ c == 0) : ~ negligible (fun _ => c).
   Proof.
@@ -1667,7 +1668,7 @@ Section Language.
     cbv [indist universal_security_game interp].
     intro H.
     specialize (H (fun _ => PositiveSet.empty)
-                  (fun n _ _ t _ => inhabited t n)
+                  (fun n _ _ t _ => interp_type_inhabited t n)
                   (fun eta rands v => inspect_vbool v)).
     cbv [id] in *.
     setoid_rewrite Bind_unused in H.
@@ -2069,7 +2070,7 @@ Section Language.
     Context {tkey tnonce : type}
             {ekeygen : (trand -> tkey)%etype}
             {encrypt : (tkey * tnonce * tmessage -> tmessage)%etype}
-            {decrypt : (tkey * tmessage -> tbool * tmessage)%etype}.
+            {decrypt : (tkey * tmessage -> tmessage)%etype}.
 
     Context {confidentiality :
                @confidentiality_conclusion tmessage eq_len tkey tnonce ekeygen encrypt}.
@@ -2083,13 +2084,7 @@ Section Language.
                @mac_conclusion tmessage tmac tmkey mkeygen mac mverify}.
 
     Context {skey2message : (tskey -> tmessage)%etype}
-            {message2skey : (tmessage -> tskey)%etype}
-            {pkey2message : (tpkey -> tmessage)%etype}
-            {message2pkey : (tmessage -> tpkey)%etype}
-            {mac2message : (tmac -> tmessage)%etype}
-            {message2mac : (tmessage -> tmac)%etype}
-            {signature2message : (tsignature -> tmessage)%etype}
-            {message2signature : (tmessage -> tsignature)%etype}.
+            {message2skey : (tmessage -> tskey)%etype}.
 
     (* constant nonce *)
     Context {N : forall eta, interp_type tnonce eta}.
@@ -2107,7 +2102,7 @@ Section Language.
     Arguments ffst {_ _}.
     Arguments fsnd {_ _}.
 
-    Context {complaint arbitrary : forall eta, interp_type tmessage eta}.
+    Context {arbitrary : forall eta, interp_type tmessage eta}.
 
     Local Open Scope list_scope.
     Context (skn1 skn2 Kn : positive) (msg : expr tmessage)
@@ -2136,52 +2131,42 @@ Section Language.
                           | _ => msK
                           end).
       Definition mac_out := mac@(sk2, enc_out).
-      Definition mmac_out := mac2message@mac_out.
-      Definition net_in_1 := fcons@(enc_out, fcons@(mmac_out, #cnil)).
-      Definition adv_out_1 := !tmessage@net_in_1.
-      Definition adv_out_1_tup := prod_decode@adv_out_1.
-      Definition adv_out_msg := ffst@adv_out_1_tup.
-      Definition adv_out_mmac := fsnd@adv_out_1_tup.
-      Definition adv_out_mac := message2mac@adv_out_mmac.
+      Definition net_in_1 := (enc_out, mac_out)%expr.
+      Definition adv_out_1 := !(tmessage * tmac)@net_in_1.
+      Definition adv_out_msg := ffst@adv_out_1.
+      Definition adv_out_mac := fsnd@adv_out_1.
       Definition check_out := mverify@(sk2, adv_out_msg, adv_out_mac).
       Definition dec_out :=
         match s with
         | Start => decrypt@(sk1, adv_out_msg)
-        | _ => (#vtrue, msK)
+        | _ => msK
         end%expr.
-      Definition dec_ok := ffst@dec_out.
-      Definition dec_msg := fsnd@dec_out.
+      Definition dec_msg := dec_out.
       Definition sK' := message2skey@dec_msg.
       Definition sign_out := sign@(sK', msg).
-      Definition sign_out_m := signature2message@sign_out.
 
-      Definition checks_2 := (check_out /\ dec_ok)%expr.
-      Definition net_in_good := fcons@(sign_out_m, fcons@(msg, net_in_1)).
-      Definition net_in_2 := (eif checks_2
+      Definition net_in_good := (sign_out, (msg, net_in_1))%expr.
+      Definition net_in_2 := (eif check_out
                               then net_in_good
-                              else fcons@(#complaint, net_in_1))%expr.
+                              else (#!, (#!, net_in_1)))%expr.
 
-      Definition adv_out_2 := !tmessage@net_in_2.
-      Definition adv_out_2_tup := prod_decode@adv_out_2.
-      Definition adv_out_2_msg := ffst@adv_out_2_tup.
-      Definition adv_out_2_sig_m := fsnd@adv_out_2_tup.
-      Definition adv_out_2_sig := message2signature@adv_out_2_sig_m.
+      Definition adv_out_2 := !(tmessage * tsignature)@net_in_2.
+      Definition adv_out_2_msg := ffst@adv_out_2.
+      Definition adv_out_2_sig := fsnd@adv_out_2.
       Definition pK := pkeygen@sK.
       Definition verify_out := sverify@(pK, adv_out_2_msg, adv_out_2_sig).
 
       Definition ok_msg : expr (tbool * tmessage) :=
         (verify_out, adv_out_2_msg).
 
-      Lemma ex_pr1_mac : whp (checks_2 -> adv_out_msg == enc_out).
+      Lemma ex_pr1_mac : whp (check_out -> adv_out_msg == enc_out).
         eapply whp_impl_dist with
             (a := (check_out -> expr_in adv_out_msg (enc_out :: nil))%expr).
-        - unfold checks_2.
-          generalize check_out; intro CO.
+        - generalize check_out; intro CO.
           unfold expr_in; cbn.
           generalize (adv_out_msg == enc_out)%expr; intro E.
-          generalize dec_ok; intro DO.
           solve_always.
-          destruct CO; destruct E; destruct DO; reflexivity.
+          destruct CO; destruct E; reflexivity.
         - cbv [check_out].
           eapply mac_correct.
 
@@ -2208,9 +2193,7 @@ Section Language.
           }
 
           repeat econstructor.
-          eapply mspair with (S1 := nil); eauto.
-          repeat econstructor.
-          eapply mspair with (S1 := enc_out :: nil);
+          eapply mspair with (S1 := nil);
             repeat (eauto || econstructor).
       Qed.
     End Protocol1Rewrite.

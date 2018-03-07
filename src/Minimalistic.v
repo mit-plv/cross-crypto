@@ -2090,7 +2090,7 @@ Section Language.
     Context {N : forall eta, interp_type tnonce eta}.
     Context  {tlist : type -> type}
              {cnil : forall t eta, interp_type (tlist t) eta}
-            {fcons : forall t, (t * tlist t -> tlist t)%etype}.
+             {fcons : forall t, (t * tlist t -> tlist t)%etype}.
     Arguments cnil {_}.
     Arguments fcons {_}.
 
@@ -2105,7 +2105,7 @@ Section Language.
     Context {arbitrary : forall eta, interp_type tmessage eta}.
 
     Local Open Scope list_scope.
-    Context (skn1 skn2 Kn : positive) (msg : expr tmessage)
+    Context (skn1 skn2 Kn : positive)
             (nodup : NoDup (skn1 :: skn2 :: Kn :: nil)).
 
     Section Protocol1Rewrite.
@@ -2115,7 +2115,7 @@ Section Language.
          whole thing inside its own module later. *)
 
       Inductive protocol1_rewrite_state :=
-      | Start
+      | Actual
       | ElimDec
       | RewriteEnc.
 
@@ -2132,20 +2132,22 @@ Section Language.
                           end).
       Definition mac_out := mac@(sk2, enc_out).
       Definition net_in_1 := (enc_out, mac_out)%expr.
-      Definition adv_out_1 := !(tmessage * tmac)@net_in_1.
-      Definition adv_out_msg := ffst@adv_out_1.
-      Definition adv_out_mac := fsnd@adv_out_1.
-      Definition check_out := mverify@(sk2, adv_out_msg, adv_out_mac).
+      Definition adv_out_1 := !(tmessage * tmac * tmessage)@net_in_1.
+
+      Definition adv_out_enc := ffst@(ffst@adv_out_1).
+      Definition adv_out_mac := fsnd@(ffst@adv_out_1).
+      Definition adv_out_msg := fsnd@adv_out_1.
+      Definition check_out := mverify@(sk2, adv_out_enc, adv_out_mac).
       Definition dec_out :=
         match s with
-        | Start => decrypt@(sk1, adv_out_msg)
+        | Actual => decrypt@(sk1, adv_out_enc)
         | _ => msK
         end%expr.
       Definition dec_msg := dec_out.
       Definition sK' := message2skey@dec_msg.
-      Definition sign_out := sign@(sK', msg).
+      Definition sign_out := sign@(sK', adv_out_msg).
 
-      Definition net_in_good := (sign_out, (msg, net_in_1))%expr.
+      Definition net_in_good := (sign_out, (adv_out_msg, net_in_1))%expr.
       Definition net_in_2 := (eif check_out
                               then net_in_good
                               else (#!, (#!, net_in_1)))%expr.
@@ -2156,15 +2158,12 @@ Section Language.
       Definition pK := pkeygen@sK.
       Definition verify_out := sverify@(pK, adv_out_2_msg, adv_out_2_sig).
 
-      Definition ok_msg : expr (tbool * tmessage) :=
-        (verify_out, adv_out_2_msg).
-
-      Lemma ex_pr1_mac : whp (check_out -> adv_out_msg == enc_out).
+      Lemma mac_integrity : whp (check_out -> adv_out_enc == enc_out).
         eapply whp_impl_dist with
-            (a := (check_out -> expr_in adv_out_msg (enc_out :: nil))%expr).
+            (a := (check_out -> expr_in adv_out_enc (enc_out :: nil))%expr).
         - generalize check_out; intro CO.
           unfold expr_in; cbn.
-          generalize (adv_out_msg == enc_out)%expr; intro E.
+          generalize (adv_out_enc == enc_out)%expr; intro E.
           solve_always.
           destruct CO; destruct E; reflexivity.
         - cbv [check_out].
@@ -2196,11 +2195,81 @@ Section Language.
           eapply mspair with (S1 := nil);
             repeat (eauto || econstructor).
       Qed.
+
     End Protocol1Rewrite.
 
+    Lemma dec_of_enc :
+      whp (check_out Actual -> dec_out Actual == dec_out ElimDec).
+    Proof.
+      cbn.
+      assert (forall t2 t3 a (b b' : expr t2) (c c' : expr t3),
+                 whp (a -> b == b') ->
+                 whp (a -> c == c') ->
+                 whp (a -> (b, c) == (b', c'))) as PP by admit.
+      assert (forall a t1 t2 (f : func t1 t2) b b',
+                 whp (a -> b == b') ->
+                 whp (a -> f@b == f@b')) as PFA by admit.
+      assert (forall a a', eqwhp a a' -> whp a -> whp a') as PEW by admit.
+      pose proof (PEW (check_out Actual -> decrypt@(sk1, enc_out Actual) == msK)%expr (check_out Actual -> decrypt@(sk1, adv_out_enc Actual) == msK)%expr).
+      apply H.
+      clear H.
+      symmetry.
+      assert (forall a b b',
+                 whp (a -> b == b') ->
+                 eqwhp (a -> b) (a -> b')) as PEI by admit.
+      apply PEI.
+      pose proof (PFA (check_out Actual) _ _ feqb (decrypt@(sk1, adv_out_enc Actual), msK) (decrypt@(sk1, enc_out Actual), msK))%expr.
+      apply H.
+      clear H.
+      apply PP.
+      apply PFA.
+      apply PP.
+      admit.
+      apply mac_integrity.
+      admit.
+
+      cbv [enc_out].
+
+      assert (forall sk n m, eqwhp (decrypt@(ekeygen@$sk, encrypt@(ekeygen@$sk, n, m)))%expr m) as DE by admit.
+
+      assert (forall a b, whp b -> whp (a -> b)%expr) by admit.
+      apply H0.
+
+      cbv [eqwhp] in DE.
+      cbv [sk1].
+      apply DE.
+    Admitted.
+
+    Lemma elimdec_verify :
+      whp (check_out Actual -> verify_out Actual == verify_out ElimDec).
+    Admitted.
+    Lemma elimdec_adv_msg :
+      whp (check_out Actual -> adv_out_msg Actual == adv_out_msg ElimDec).
+    Admitted.
+    Lemma elimdec_adv_msg_2 :
+      whp (check_out Actual -> adv_out_2_msg Actual == adv_out_2_msg ElimDec).
+    Admitted.
+
+    Lemma rewrite_enc :
+      (verify_out ElimDec ->
+       adv_out_2_msg ElimDec == adv_out_msg ElimDec)
+        ≈
+        (verify_out RewriteEnc ->
+         adv_out_2_msg RewriteEnc == adv_out_msg RewriteEnc).
+    Admitted.
+
+    (* Goal Proper (whp ==> whp) indist. *)
+
+    Lemma authenticity_after_rewrite :
+      whp (verify_out RewriteEnc ->
+           adv_out_2_msg RewriteEnc == adv_out_msg RewriteEnc).
+    Admitted.
+
+    Lemma verify_impl_check : whp (verify_out Actual -> check_out Actual).
+    Admitted.
+
     Theorem example_proto_1_authenticity :
-      let p := ok_msg Start in
-      whp (ffst@p -> fsnd@p == msg).
+      whp (verify_out Actual -> adv_out_2_msg Actual == adv_out_msg Actual).
     Admitted.
 
   End ExampleProtocol1.

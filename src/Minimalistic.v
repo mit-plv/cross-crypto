@@ -2102,8 +2102,6 @@ Section Language.
     Arguments ffst {_ _}.
     Arguments fsnd {_ _}.
 
-    Context {arbitrary : forall eta, interp_type tmessage eta}.
-
     Local Open Scope list_scope.
     Context (skn1 skn2 Kn : positive)
             (nodup : NoDup (skn1 :: skn2 :: Kn :: nil)).
@@ -2127,7 +2125,7 @@ Section Language.
       Definition msK := skey2message@sK.
       Definition enc_out :=
         encrypt@(sk1, #N, match s with
-                          | RewriteEnc => #arbitrary
+                          | RewriteEnc => #!
                           | _ => msK
                           end).
       Definition mac_out := mac@(sk2, enc_out).

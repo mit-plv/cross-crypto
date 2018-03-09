@@ -1686,10 +1686,7 @@ Section Language.
 
   Lemma if_same b t (e:expr t) : eqwhp (eif b then e else e) e.
   Proof.
-    cbv [eqwhp].
-    eapply always_whp.
-    goal_unpack_always.
-    destruct b; rewrite eqb_refl; reflexivity.
+    cbv [eqwhp]; unpack_whp. destruct b; rewrite eqb_refl; reflexivity.
   Qed.
 
   (* TODO: contribute to FCF *)
@@ -1730,35 +1727,17 @@ Section Language.
 
   Lemma if_whp_true t (b : expr tbool) (e1 e2:expr t) :
     whp b -> eqwhp (eif b then e1 else e2) e1.
-  Proof.
-    eapply whp_impl.
-    eapply always_whp.
-    goal_unpack_always.
-    destruct b; eauto using eqb_refl.
-  Qed.
+  Proof. cbv [eqwhp]; unpack_whp; destruct b; eauto using eqb_refl. Qed.
 
   Corollary if_true t (e1 e2:expr t) : eqwhp (eif #vtrue then e1 else e2) e1.
-  Proof.
-    eapply if_whp_true.
-    eapply whp_true.
-  Qed.
+  Proof. eapply if_whp_true. eapply whp_true. Qed.
 
   Lemma if_whp_false t (b : expr tbool) (e1 e2:expr t) :
     whp (~b) -> eqwhp (eif b then e1 else e2) e2.
-  Proof.
-    eapply whp_impl.
-    eapply always_whp.
-    goal_unpack_always.
-    destruct b; cbn; eauto using eqb_refl.
-  Qed.
+  Proof. cbv [eqwhp]; unpack_whp; destruct b; cbn; eauto using eqb_refl. Qed.
 
   Corollary if_false t (e1 e2:expr t) : eqwhp (eif #vfalse then e1 else e2) e2.
-  Proof.
-    eapply if_whp_false.
-    eapply always_whp.
-    goal_unpack_always.
-    reflexivity.
-  Qed.
+  Proof. eapply if_whp_false. unpack_whp. reflexivity. Qed.
 
   Definition expr_in {t} (x : expr t) : list (expr t) -> expr tbool :=
     (fold_right (fun m acc => x == m \/ acc)%expr #vfalse)%expr.
@@ -2075,18 +2054,15 @@ Section Language.
       intros C hole_dec NI h1 h2.
       destruct (hole_dec h1 h2).
       - subst h2.
-        eapply always_whp.
-        goal_unpack_always.
+        unpack_whp.
         repeat match goal with
                | |- context [?a ?= ?b] => destruct (a ?= b) eqn:?
                | H : _ = _ |- _ =>
                  rewrite eqb_leibniz in H; rewrite H in *; clear H
                | H : _ = _ |- _ => rewrite eqb_refl in H; discriminate H
-               | _ => goal_unpack_always
                | _ => reflexivity
                end.
-      - eapply always_whp.
-        goal_unpack_always.
+      - unpack_whp.
         repeat match goal with
                | |- context [?a ?= ?b] =>
                  destruct (a ?= b) eqn:?
@@ -2095,7 +2071,6 @@ Section Language.
                | H : N _ _ = N _ _ |- _ =>
                  apply NI in H; rewrite H in *; clear H
                | H: _ = _ |- _ => rewrite eqb_refl in H; discriminate H
-               | _ => goal_unpack_always
                | _ => reflexivity
                end.
     Qed.
@@ -2207,11 +2182,7 @@ Section Language.
 
       Lemma expr_in_singleton {t} (a b:expr t)
         : eqwhp (expr_in a (b :: nil)) (a == b).
-      Proof.
-        apply always_whp.
-        cbn [expr_in fold_right].
-        goal_unpack_always; btauto.
-      Qed.
+      Proof. cbn [expr_in fold_right]; unpack_whp; btauto. Qed.
 
       Lemma mac_integrity : whp (check_out -> adv_out_enc == enc_out).
         rewrite <-(expr_in_singleton adv_out_enc enc_out).
@@ -2248,10 +2219,15 @@ Section Language.
 
     End Protocol1Rewrite.
 
+    Compute (verify_out Actual -> adv_out_2_msg Actual == adv_out_msg Actual)%expr.
+
     Lemma dec_of_enc :
       whp (check_out Actual -> dec_out Actual == dec_out ElimDec).
     Proof.
       cbn.
+      match goal with |- whp ?X => pose X end.
+      compute in e.
+
       assert (forall t2 t3 a (b b' : expr t2) (c c' : expr t3),
                  whp (a -> b == b') ->
                  whp (a -> c == c') ->

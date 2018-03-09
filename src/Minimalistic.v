@@ -36,8 +36,8 @@ Section Language.
   Local Notation "'#' x" := (expr_const x) (right associativity, at level 9, format "# x") : expr_scope.
   Local Notation "'$' x" := (expr_random x%positive) (right associativity, at level 79, x at next level, format "$ x") : expr_scope. (* FIXME: we want level 9, but it conflicts with fcf *)
   Local Notation "f @ x" := (expr_app f x) (left associativity, at level 11, format "f @ x").
-  Local Notation "'!' '@' x" := (expr_adversarial x%expr) (left associativity, at level 11, format "! @ x").
   Local Notation "'!' t '@' x" := (@expr_adversarial _ t x%expr) (left associativity, at level 11, format "! t @ x", t at next level).
+  Local Notation "'!' '@' x" := (expr_adversarial x%expr) (left associativity, at level 11, format "! @ x").
   Local Notation "( x , y , .. , z )" := (expr_pair .. (expr_pair x%expr y%expr) .. z%expr) : expr_scope.
   Local Notation "'#!'" := (expr_const (interp_type_inhabited _)) : expr_scope.
 
@@ -2218,8 +2218,6 @@ Section Language.
       Qed.
 
     End Protocol1Rewrite.
-
-    Compute (verify_out Actual -> adv_out_2_msg Actual == adv_out_msg Actual)%expr.
 
     Lemma dec_of_enc :
       whp (check_out Actual -> dec_out Actual == dec_out ElimDec).

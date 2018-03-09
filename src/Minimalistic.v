@@ -412,10 +412,21 @@ Section Language.
       forall adl adv,
         (* TODO: insert bounds on coputational complexity of [adv] and [dst] here *)
         negligible (fun eta : nat => Pr[whp_game adl adv eta e]).
-
-    Definition always (e : expr tbool) :=
-      forall eta adv rands, interp_fixed e eta adv rands = vtrue eta.
   End WHP.
+
+  Definition always (e : expr tbool) :=
+    forall eta adv rands, interp_fixed e eta adv rands = vtrue eta.
+
+  Lemma always_impl a b : always (a -> b) -> (always a -> always b).
+  Proof.
+    intros Hab Ha eta adv rands; specialize (Hab eta adv rands); specialize (Ha eta adv rands).
+    cbv [always] in *.
+    cbn [interp_fixed] in *.
+    rewrite Ha in Hab; clear Ha.
+    rewrite <- Hab; clear Hab.
+    apply inspect_vbool_inj.
+    rewrite interp_fimpl, inspect_vtrue; reflexivity.
+  Qed.
 
   Lemma eqb_tbool eta (v1 v2 : interp_type tbool eta) :
     (v1 ?= v2) = (inspect_vbool v1 ?= inspect_vbool v2).
@@ -472,6 +483,17 @@ Section Language.
     cbn [interp_fixed];
     autorewrite with push_interp;
     remember_inspect_vbool.
+
+
+  Ltac merge_always_step :=
+    match goal with
+    | |- always _ -> _ => intros ?
+    | H : always _ |- always _ => revert H; apply always_impl
+    end.
+  Ltac merge_always := repeat merge_always_step.
+
+  Ltac unpack_always := merge_always; goal_unpack_always.
+
 
   Local Existing Instance eq_subrelation | 5.
 
@@ -1200,7 +1222,7 @@ Section Language.
       destruct b1; destruct b2; intuition.
     Qed.
 
-    Lemma whp_impl_dist a b : always (a -> b) -> (whp a -> whp b)%core.
+    Lemma weak_whp_impl_dist_always a b : always (a -> b) -> (whp a -> whp b)%core.
     Proof.
       repeat rewrite whp_whp_simple.
       cbv [whp_simple whp_game always interp].
@@ -1274,14 +1296,12 @@ Section Language.
 
     Corollary whp_or_inl a b : whp a -> whp (a \/ b).
     Proof.
-      intros; eapply whp_impl_dist; eauto.
-      goal_unpack_always; btauto.
+      eapply weak_whp_impl_dist_always; goal_unpack_always; btauto.
     Qed.
 
     Corollary whp_or_inr a b : whp b -> whp (a \/ b).
     Proof.
-      intros; eapply whp_impl_dist; eauto.
-      goal_unpack_always; btauto.
+      eapply weak_whp_impl_dist_always; goal_unpack_always; btauto.
     Qed.
 
     Lemma whp_and a b : whp a /\ whp b -> whp (a /\ b).
@@ -1417,34 +1437,37 @@ Section Language.
           eauto.
     Qed.
 
-    Lemma implb_true_r :
-      forall b, implb b true = true.
-    Proof. destruct b; eauto. Qed.
-
     Lemma whp_true : whp (#vtrue).
     Proof. cbv [whp]. reflexivity. Qed.
 
     Lemma always_whp e : always e -> whp e.
     Proof.
       intros A.
-      eapply whp_impl_dist with (a := (#vtrue)%expr).
-      - goal_always_to_inspect_interp_fixed_true;
-          cbn[interp_fixed]; autorewrite with push_interp.
-        cbv [implb].
-        rewrite A.
-        autorewrite with push_interp; reflexivity.
-      - eapply whp_true.
+      eapply (fun pf => weak_whp_impl_dist_always ((#vtrue)%expr) _ pf whp_true).
+      cbv [always] in A.
+      goal_always_to_inspect_interp_fixed_true.
+      cbn[interp_fixed].
+      rewrite A; autorewrite with push_interp; reflexivity.
     Qed.
 
     Lemma whp_impl a b : whp (a -> b) -> (whp a -> whp b)%core.
     Proof.
       intros I A.
-      eapply whp_impl_dist with (a := (a /\ (a -> b))%expr).
+      eapply weak_whp_impl_dist_always with (a := (a /\ (a -> b))%expr).
       - goal_unpack_always.
         destruct a; destruct b; reflexivity.
       - eauto using whp_and.
     Qed.
   End WHPLemmas.
+
+  Ltac merge_whp_step :=
+    match goal with
+    | |- whp _ -> _ => intros ?
+    | H : whp _ |- whp _ => revert H; apply whp_impl
+    end.
+  Ltac merge_whp := repeat merge_whp_step.
+
+  Ltac unpack_whp := merge_whp; apply always_whp; unpack_always.
 
   Section Equality.
     Definition eqwhp {t} (e1 e2:expr t) : Prop := whp (e1 == e2).
@@ -1464,18 +1487,14 @@ Section Language.
     Global Instance Reflexive_eqwhp {t} : Reflexive (@eqwhp t).
     Proof.
       cbv [Reflexive indist universal_security_game eqwhp]; intros.
-      eapply always_whp.
-      goal_unpack_always.
+      unpack_whp.
       apply eqb_refl.
     Qed.
 
     Global Instance Symmetric_eqwhp {t} : Symmetric (@eqwhp t).
     Proof.
       cbv [Symmetric indist universal_security_game eqwhp].
-      intros x y.
-      eapply whp_impl.
-      eapply always_whp.
-      goal_unpack_always.
+      intros x y; unpack_whp.
       repeat match goal with
              | |- context [?a ?= ?b] => destruct (a ?= b) eqn:?
              | H:_|-_ => rewrite eqb_leibniz in H; rewrite H in *; clear H
@@ -1487,13 +1506,7 @@ Section Language.
     Global Instance Transitive_eqwhp {t} : Transitive (@eqwhp t).
     Proof.
       cbv [Transitive eqwhp].
-      intros x y z.
-      intro H.
-      eapply whp_impl.
-      revert H.
-      eapply whp_impl.
-      eapply always_whp.
-      goal_unpack_always.
+      intros; unpack_whp.
       repeat match goal with
              | |- context [?a ?= ?b] => destruct (a ?= b) eqn:?
              | H:_|-_ => rewrite eqb_leibniz in H; rewrite H in *; clear H
@@ -1505,12 +1518,7 @@ Section Language.
     Global Instance Proper_eqwhp_pair {t1 t2} :
       Proper (eqwhp ==> eqwhp ==> eqwhp) (@expr_pair t1 t2).
     Proof.
-      intros ?? Hx ??.
-      eapply whp_impl.
-      revert Hx.
-      eapply whp_impl.
-      eapply always_whp.
-      goal_unpack_always.
+      intros ?? Hx ??; cbv [eqwhp] in *; unpack_whp.
       repeat match goal with
              | |- context [?a ?= ?b] => destruct (a ?= b) eqn:?
              | H : _ = _ |- _ =>
@@ -1522,10 +1530,7 @@ Section Language.
 
     Global Instance Proper_eqwhp_adversarial {t1 t2} : Proper (eqwhp ==> eqwhp) (@expr_adversarial t1 t2).
     Proof.
-      intros ??.
-      eapply whp_impl.
-      eapply always_whp.
-      goal_unpack_always.
+      intros ??; cbv [eqwhp] in *; unpack_whp.
       repeat match goal with
              | |- context [?a ?= ?b] => destruct (a ?= b) eqn:?
              | H : _ = _ |- _ =>
@@ -1537,10 +1542,7 @@ Section Language.
 
     Global Instance Proper_eqwhp_func {t1 t2} f : Proper (eqwhp ==> eqwhp) (@expr_app t1 t2 f).
     Proof.
-      intros ??.
-      eapply whp_impl.
-      eapply always_whp.
-      goal_unpack_always.
+      intros ??; cbv [eqwhp] in *; unpack_whp.
       repeat match goal with
              | |- context [?a ?= ?b] => destruct (a ?= b) eqn:?
              | H : _ = _ |- _ =>

@@ -5,6 +5,11 @@ Require Import FCF.FCF FCF.Asymptotic FCF.EqDec.
 Require Import CrossCrypto.Util CrossCrypto.RatUtil CrossCrypto.RewriteUtil CrossCrypto.MapUtil.
 Require Import Lia. (* TODO: remove after removing not_negligible_const *)
 
+Require Import Coq.btauto.Btauto.
+Lemma eqb_bool a b : (a ?= b) = negb (xorb a b). Admitted.
+Ltac btauto' := btauto.
+Ltac btauto := cbv [implb] in *; rewrite ?eqb_bool; rewrite ?eqb_bool in *; btauto'.
+
 Section Language.
   Context {type  : Set} {eqdec_type : EqDec type}
           {interp_type : type -> nat -> Set}
@@ -390,6 +395,14 @@ Section Language.
   Section WHP.
     Definition whp (e:expr tbool) := e ≈ #vtrue.
 
+    Global Instance Proper_whp_indist : Proper (indist ==> iff) whp.
+    Proof.
+      intros ? ? H.
+      cbv [whp].
+      rewrite H.
+      reflexivity.
+    Qed.
+
     Definition whp_game evil_rand_indices adversary eta e : Comp Datatypes.bool :=
       evil_rands <-$ generate_randomness eta (evil_rand_indices eta);
         out <-$ interp e eta (adversary eta (evil_rands));
@@ -404,28 +417,47 @@ Section Language.
       forall eta adv rands, interp_fixed e eta adv rands = vtrue eta.
   End WHP.
 
+  Lemma eqb_tbool eta (v1 v2 : interp_type tbool eta) :
+    (v1 ?= v2) = (inspect_vbool v1 ?= inspect_vbool v2).
+  Proof.
+    destruct (v1 ?= v2) eqn:HL;
+      destruct (inspect_vbool v1 ?= inspect_vbool v2) eqn:HR;
+      try congruence; [|].
+    { rewrite eqb_false_iff in HR.
+      rewrite eqb_leibniz in HL; subst; congruence. }
+    { rewrite eqb_false_iff in HL.
+      rewrite eqb_leibniz in HR; subst.
+      apply inspect_vbool_inj in HR; congruence. }
+  Qed.
 
-  Hint Rewrite interp_fimpl : push_interp.
-  Hint Rewrite interp_fand : push_interp.
-  Hint Rewrite interp_f_or : push_interp.
-  Hint Rewrite interp_fimpl : push_interp.
-  Hint Rewrite interp_fnegb : push_interp.
-  Hint Rewrite interp_feqb : push_interp.
-  Hint Rewrite inspect_vtrue : push_interp.
-  Hint Rewrite inspect_vfalse : push_interp.
-  Hint Rewrite @interp_ite : push_interp.
+  Hint Rewrite
+       @interp_fnegb
+       @interp_fnegb
+       @interp_fand
+       @interp_f_or
+       @interp_fimpl
+       @interp_f_or
+       @interp_fand
+       @interp_fimpl
+       @interp_feqb
+       @eqb_tbool
+       @interp_ite
+       @inspect_vtrue
+       @inspect_vfalse
+       : push_interp.
 
-  Ltac solve_always' :=
-    repeat match goal with
-           | |- always _ => cbv [always]; intros
-           | _ => progress cbn [interp_fixed]
-           | |- ?x = _ =>
-             match type of x with
-             | interp_type tbool _ => eapply inspect_vbool_inj
-             end
-           | _ => autorewrite with push_interp
-           end.
-
+  Ltac goal_always_to_inspect_interp_fixed_true :=
+    lazymatch goal with
+    | |- always _ =>
+      progress cbv [always];
+      let eta := fresh "eta" in
+      let adv := fresh "adv" in
+      let rands := fresh "rands" in
+      intros eta adv rands;
+      apply inspect_vbool_inj;
+      rewrite inspect_vtrue
+    end.
+  
   Ltac remember_inspect_vbool :=
     repeat match goal with
            | [ |- context[inspect_vbool (interp_fixed ?e _ _ _)] ] =>
@@ -435,8 +467,11 @@ Section Language.
              remember (inspect_vbool (interp_fixed v _ _ _)) as e
            end.
 
-  Ltac solve_always := solve_always'; remember_inspect_vbool.
-
+  Ltac goal_unpack_always :=
+    goal_always_to_inspect_interp_fixed_true;
+    cbn [interp_fixed];
+    autorewrite with push_interp;
+    remember_inspect_vbool.
 
   Local Existing Instance eq_subrelation | 5.
 
@@ -1240,15 +1275,13 @@ Section Language.
     Corollary whp_or_inl a b : whp a -> whp (a \/ b).
     Proof.
       intros; eapply whp_impl_dist; eauto.
-      solve_always.
-      destruct a; destruct b; reflexivity.
+      goal_unpack_always; btauto.
     Qed.
 
     Corollary whp_or_inr a b : whp b -> whp (a \/ b).
     Proof.
       intros; eapply whp_impl_dist; eauto.
-      solve_always.
-      destruct a; destruct b; reflexivity.
+      goal_unpack_always; btauto.
     Qed.
 
     Lemma whp_and a b : whp a /\ whp b -> whp (a /\ b).
@@ -1395,11 +1428,11 @@ Section Language.
     Proof.
       intros A.
       eapply whp_impl_dist with (a := (#vtrue)%expr).
-      - solve_always'.
+      - goal_always_to_inspect_interp_fixed_true;
+          cbn[interp_fixed]; autorewrite with push_interp.
         cbv [implb].
         rewrite A.
-        solve_always.
-        reflexivity.
+        autorewrite with push_interp; reflexivity.
       - eapply whp_true.
     Qed.
 
@@ -1407,7 +1440,7 @@ Section Language.
     Proof.
       intros I A.
       eapply whp_impl_dist with (a := (a /\ (a -> b))%expr).
-      - solve_always.
+      - goal_unpack_always.
         destruct a; destruct b; reflexivity.
       - eauto using whp_and.
     Qed.
@@ -1416,12 +1449,24 @@ Section Language.
   Section Equality.
     Definition eqwhp {t} (e1 e2:expr t) : Prop := whp (e1 == e2).
 
+      Global Instance subrelation_eqwhp_indist {t} : subrelation (@eqwhp t) (@indist t).
+      Proof.
+        intros ? ? H.
+      Admitted.
+
+      Global Instance Proper_whp_eqwhp : Proper (eqwhp ==> iff) whp.
+        intros ? ? H.
+        apply subrelation_eqwhp_indist in H.
+        apply Proper_whp_indist.
+        exact H.
+      Qed.
+
     Global Instance Reflexive_eqwhp {t} : Reflexive (@eqwhp t).
     Proof.
       cbv [Reflexive indist universal_security_game eqwhp]; intros.
       eapply always_whp.
-      solve_always.
-      eapply eqb_refl.
+      goal_unpack_always.
+      apply eqb_refl.
     Qed.
 
     Global Instance Symmetric_eqwhp {t} : Symmetric (@eqwhp t).
@@ -1430,7 +1475,7 @@ Section Language.
       intros x y.
       eapply whp_impl.
       eapply always_whp.
-      solve_always.
+      goal_unpack_always.
       repeat match goal with
              | |- context [?a ?= ?b] => destruct (a ?= b) eqn:?
              | H:_|-_ => rewrite eqb_leibniz in H; rewrite H in *; clear H
@@ -1448,7 +1493,7 @@ Section Language.
       revert H.
       eapply whp_impl.
       eapply always_whp.
-      solve_always.
+      goal_unpack_always.
       repeat match goal with
              | |- context [?a ?= ?b] => destruct (a ?= b) eqn:?
              | H:_|-_ => rewrite eqb_leibniz in H; rewrite H in *; clear H
@@ -1465,7 +1510,7 @@ Section Language.
       revert Hx.
       eapply whp_impl.
       eapply always_whp.
-      solve_always.
+      goal_unpack_always.
       repeat match goal with
              | |- context [?a ?= ?b] => destruct (a ?= b) eqn:?
              | H : _ = _ |- _ =>
@@ -1480,7 +1525,7 @@ Section Language.
       intros ??.
       eapply whp_impl.
       eapply always_whp.
-      solve_always.
+      goal_unpack_always.
       repeat match goal with
              | |- context [?a ?= ?b] => destruct (a ?= b) eqn:?
              | H : _ = _ |- _ =>
@@ -1495,7 +1540,7 @@ Section Language.
       intros ??.
       eapply whp_impl.
       eapply always_whp.
-      solve_always.
+      goal_unpack_always.
       repeat match goal with
              | |- context [?a ?= ?b] => destruct (a ?= b) eqn:?
              | H : _ = _ |- _ =>
@@ -1641,7 +1686,7 @@ Section Language.
   Proof.
     cbv [eqwhp].
     eapply always_whp.
-    solve_always.
+    goal_unpack_always.
     destruct b; rewrite eqb_refl; reflexivity.
   Qed.
 
@@ -1686,7 +1731,7 @@ Section Language.
   Proof.
     eapply whp_impl.
     eapply always_whp.
-    solve_always.
+    goal_unpack_always.
     destruct b; eauto using eqb_refl.
   Qed.
 
@@ -1701,7 +1746,7 @@ Section Language.
   Proof.
     eapply whp_impl.
     eapply always_whp.
-    solve_always.
+    goal_unpack_always.
     destruct b; cbn; eauto using eqb_refl.
   Qed.
 
@@ -1709,7 +1754,7 @@ Section Language.
   Proof.
     eapply if_whp_false.
     eapply always_whp.
-    solve_always.
+    goal_unpack_always.
     reflexivity.
   Qed.
 
@@ -2029,16 +2074,17 @@ Section Language.
       destruct (hole_dec h1 h2).
       - subst h2.
         eapply always_whp.
-        solve_always.
+        goal_unpack_always.
         repeat match goal with
                | |- context [?a ?= ?b] => destruct (a ?= b) eqn:?
                | H : _ = _ |- _ =>
                  rewrite eqb_leibniz in H; rewrite H in *; clear H
                | H : _ = _ |- _ => rewrite eqb_refl in H; discriminate H
-               | _ => solve_always; reflexivity
+               | _ => goal_unpack_always
+               | _ => reflexivity
                end.
       - eapply always_whp.
-        solve_always.
+        goal_unpack_always.
         repeat match goal with
                | |- context [?a ?= ?b] =>
                  destruct (a ?= b) eqn:?
@@ -2047,7 +2093,8 @@ Section Language.
                | H : N _ _ = N _ _ |- _ =>
                  apply NI in H; rewrite H in *; clear H
                | H: _ = _ |- _ => rewrite eqb_refl in H; discriminate H
-               | _ => solve_always; try reflexivity
+               | _ => goal_unpack_always
+               | _ => reflexivity
                end.
     Qed.
   End Encrypt.
@@ -2156,42 +2203,45 @@ Section Language.
       Definition pK := pkeygen@sK.
       Definition verify_out := sverify@(pK, adv_out_2_msg, adv_out_2_sig).
 
+      Lemma expr_in_singleton {t} (a b:expr t)
+        : eqwhp (expr_in a (b :: nil)) (a == b).
+      Proof.
+        apply always_whp.
+        cbn [expr_in fold_right].
+        goal_unpack_always; btauto.
+      Qed.
+
       Lemma mac_integrity : whp (check_out -> adv_out_enc == enc_out).
-        eapply whp_impl_dist with
-            (a := (check_out -> expr_in adv_out_enc (enc_out :: nil))%expr).
-        - generalize check_out; intro CO.
-          unfold expr_in; cbn.
-          generalize (adv_out_enc == enc_out)%expr; intro E.
-          solve_always.
-          destruct CO; destruct E; reflexivity.
-        - cbv [check_out].
-          eapply mac_correct.
+        rewrite <-(expr_in_singleton adv_out_enc enc_out).
+        cbv [check_out].
 
-          assert (@mac_safe tmessage tmac tmkey mkeygen mac mverify skn2 _ enc_out nil)
-            as enc_out_mac_safe.
-          {
-            repeat match goal with
-                   | [ |- context[match ?s with _ => _ end] ] =>
-                     match type of s with
-                     | protocol1_rewrite_state => destruct s
-                     end
-                   | [ |- mac_safe _ _ _ ] =>
-                     econstructor || eapply mspair with (S1 := nil)
-                   | [ |- _ <> _ ] =>
-                     intro;
-                       repeat (subst;
-                               match goal with
-                               | [ H : NoDup _ |- _ ] =>
-                                 inversion_clear H
-                               end;
-                               cbv [In] in *;
-                               eauto)
-                   end.
-          }
+        eapply mac_correct.
 
-          repeat econstructor.
-          eapply mspair with (S1 := nil);
-            repeat (eauto || econstructor).
+        assert (@mac_safe tmessage tmac tmkey mkeygen mac mverify skn2 _ enc_out nil)
+          as enc_out_mac_safe.
+        {
+          repeat match goal with
+                 | [ |- context[match ?s with _ => _ end] ] =>
+                   match type of s with
+                   | protocol1_rewrite_state => destruct s
+                   end
+                 | [ |- mac_safe _ _ _ ] =>
+                   econstructor || eapply mspair with (S1 := nil)
+                 | [ |- _ <> _ ] =>
+                   intro;
+                     repeat (subst;
+                             match goal with
+                             | [ H : NoDup _ |- _ ] =>
+                               inversion_clear H
+                             end;
+                             cbv [In] in *;
+                             eauto)
+                 end.
+        }
+
+        repeat econstructor.
+        eapply mspair with (S1 := nil);
+          repeat (eauto || econstructor).
       Qed.
 
     End Protocol1Rewrite.
@@ -2207,7 +2257,7 @@ Section Language.
       assert (forall a t1 t2 (f : func t1 t2) b b',
                  whp (a -> b == b') ->
                  whp (a -> f@b == f@b')) as PFA by admit.
-      assert (forall a a', eqwhp a a' -> whp a -> whp a') as PEW by admit.
+      assert (forall a a', eqwhp a a' -> whp a -> whp a') as PEW by apply Proper_whp_eqwhp.
       pose proof (PEW (check_out Actual -> decrypt@(sk1, enc_out Actual) == msK)%expr (check_out Actual -> decrypt@(sk1, adv_out_enc Actual) == msK)%expr).
       apply H.
       clear H.

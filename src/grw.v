@@ -313,3 +313,20 @@ Module flatprog.
     End WithMonad.
   End simply_typed.
 End flatprog.
+
+(*
+monad rewriting unification notes:
+
+normalization: sort by (topological order, arbitrary strict order)
+
+single-output lemmas:
+match root of lemma LHS expression tree first, then its dependencies, then their dependencies
+the matching needs to be isolated in various ways:
+the internal binds of the lemma cannot be matched to the same bind in code: conunterexample coin xor coin
+the internal binds must be removed during the rewrite, so they cannot be used anywhere else: (coin xor coin) xor (coin xor coin)
+for the proof of this, we want to say that the code is equivalent to [ctx1; x <-(lemma...); ctx2]
+this will require queries to a commutability oracle to move parts of the lemma to be adjacent (we probably want to move everything next to the root)
+the only guess that will need to be backtracked is the location of the root
+
+multi-output lemmas like DDH are inherently harder, essentially we are doing single-output rewrite on the tuple of all outputs PLUS higher-order unification to find out how ctx2 is a function of that tuple. will involve lots of guessing.
+*)

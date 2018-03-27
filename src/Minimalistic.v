@@ -369,10 +369,11 @@ Section Language.
                interp_func ite (interp_pair (interp_pair b v1) v2) =
                if inspect_vbool b then v1 else v2).
   Arguments interp_ite {_ _}.
-  Local Notation "'eif' b 'then' x 'else' y" := (ite@(b,x,y))
-                                                  (at level 200, b at level 1000, x at level 1000, y at level 1000,
-                                                   format "'[' '[  ' 'eif'  b  'then' '/' x ']' '/' '[  ' 'else' '/' y ']' ']'")
-                                                : expr_scope.
+  Local Notation "'eif' b 'then' x 'else' y" :=
+    (ite@(b,x,y))
+      (at level 200, b at level 1000, x at level 1000, y at level 1000,
+       format "'[hv' 'eif'  b  '/' '[' 'then'  x  ']' '/' '[' 'else'  y ']' ']'")
+    : expr_scope.
 
   Section TBool.
     Definition tbool_rect eta
@@ -441,8 +442,12 @@ Section Language.
       apply inspect_vbool_inj in HR; congruence. }
   Qed.
 
+  Lemma commute_inspect_if {eta} (b : bool) (v1 v2 : interp_type tbool eta) :
+    inspect_vbool (if b then v1 else v2) =
+    if b then inspect_vbool v1 else inspect_vbool v2.
+  Proof. destruct b; reflexivity. Qed.
+
   Hint Rewrite
-       @interp_fnegb
        @interp_fnegb
        @interp_fand
        @interp_f_or
@@ -453,6 +458,7 @@ Section Language.
        @interp_feqb
        @eqb_tbool
        @interp_ite
+       @commute_inspect_if
        @inspect_vtrue
        @inspect_vfalse
        : push_interp.
@@ -468,7 +474,7 @@ Section Language.
       apply inspect_vbool_inj;
       rewrite inspect_vtrue
     end.
-  
+
   Ltac remember_inspect_vbool :=
     repeat match goal with
            | [ |- context[inspect_vbool (interp_fixed ?e _ _ _)] ] =>
@@ -1515,10 +1521,31 @@ Section Language.
              end.
     Qed.
 
+    Lemma Proper_eqwhp_pair_internal {t1 t2}
+          (e1 e1' : expr t1) (e2 e2' : expr t2) :
+        whp (e1 == e1' -> e2 == e2' -> (e1, e2) == (e1', e2')).
+    Proof.
+      unpack_whp.
+      repeat match goal with
+             | |- context [?a ?= ?b] => destruct (a ?= b) eqn:?
+             | H : _ = _ |- _ =>
+               rewrite eqb_leibniz in H; rewrite H in *; clear H
+             | H : _ = _ |- _ => rewrite eqb_refl in H; discriminate H
+             | _ => reflexivity
+             end.
+    Qed.
+
     Global Instance Proper_eqwhp_pair {t1 t2} :
       Proper (eqwhp ==> eqwhp ==> eqwhp) (@expr_pair t1 t2).
     Proof.
-      intros ?? Hx ??; cbv [eqwhp] in *; unpack_whp.
+      intros ?????. cbv [eqwhp] in *; merge_whp.
+      eapply Proper_eqwhp_pair_internal.
+    Qed.
+
+    Lemma Proper_eqwhp_adversarial_internal {t1 t2} (e e' : expr t1) :
+      whp (e == e' -> !t2@e == !t2@e').
+    Proof.
+      unpack_whp.
       repeat match goal with
              | |- context [?a ?= ?b] => destruct (a ?= b) eqn:?
              | H : _ = _ |- _ =>
@@ -1530,7 +1557,14 @@ Section Language.
 
     Global Instance Proper_eqwhp_adversarial {t1 t2} : Proper (eqwhp ==> eqwhp) (@expr_adversarial t1 t2).
     Proof.
-      intros ??; cbv [eqwhp] in *; unpack_whp.
+      intros ??; cbv [eqwhp] in *; merge_whp.
+      eapply Proper_eqwhp_adversarial_internal.
+    Qed.
+
+    Lemma Proper_eqwhp_func_internal {t1 t2} (f : func t1 t2) e e' :
+      whp (e == e' -> f@e == f@e').
+    Proof.
+      unpack_whp.
       repeat match goal with
              | |- context [?a ?= ?b] => destruct (a ?= b) eqn:?
              | H : _ = _ |- _ =>
@@ -1542,15 +1576,12 @@ Section Language.
 
     Global Instance Proper_eqwhp_func {t1 t2} f : Proper (eqwhp ==> eqwhp) (@expr_app t1 t2 f).
     Proof.
-      intros ??; cbv [eqwhp] in *; unpack_whp.
-      repeat match goal with
-             | |- context [?a ?= ?b] => destruct (a ?= b) eqn:?
-             | H : _ = _ |- _ =>
-               rewrite eqb_leibniz in H; rewrite H in *; clear H
-             | H : _ = _ |- _ => rewrite eqb_refl in H; discriminate H
-             | _ => reflexivity
-             end.
+      intros ??; cbv [eqwhp] in *; merge_whp.
+      eapply Proper_eqwhp_func_internal.
     Qed.
+
+    Lemma eqwhp_indist {t} (a a' : expr t) : eqwhp a a' -> a ≈ a'.
+    Admitted.
   End Equality.
 
   Section LateInterp.
@@ -1725,19 +1756,27 @@ Section Language.
     eapply not_negligible_const; eauto using rat1_ne_rat0.
   Qed.
 
-  Lemma if_whp_true t (b : expr tbool) (e1 e2:expr t) :
+  Lemma if_true_internal {t} b (e1 e2 : expr t) :
+    whp (b -> (eif b then e1 else e2) == e1).
+  Proof. unpack_whp; destruct b; eauto using eqb_refl. Qed.
+
+  Corollary if_true_whp t (b : expr tbool) (e1 e2:expr t) :
     whp b -> eqwhp (eif b then e1 else e2) e1.
-  Proof. cbv [eqwhp]; unpack_whp; destruct b; eauto using eqb_refl. Qed.
+  Proof. cbv [eqwhp]; merge_whp; eapply if_true_internal. Qed.
 
   Corollary if_true t (e1 e2:expr t) : eqwhp (eif #vtrue then e1 else e2) e1.
-  Proof. eapply if_whp_true. eapply whp_true. Qed.
+  Proof. eapply if_true_whp. eapply whp_true. Qed.
 
-  Lemma if_whp_false t (b : expr tbool) (e1 e2:expr t) :
+  Lemma if_false_internal {t} b (e1 e2 : expr t) :
+    whp (~b -> (eif b then e1 else e2) == e2).
+  Proof. unpack_whp; destruct b; cbn; eauto using eqb_refl. Qed.
+
+  Corollary if_false_whp t (b : expr tbool) (e1 e2:expr t) :
     whp (~b) -> eqwhp (eif b then e1 else e2) e2.
-  Proof. cbv [eqwhp]; unpack_whp; destruct b; cbn; eauto using eqb_refl. Qed.
+  Proof. cbv [eqwhp]; merge_whp; eapply if_false_internal. Qed.
 
   Corollary if_false t (e1 e2:expr t) : eqwhp (eif #vfalse then e1 else e2) e2.
-  Proof. eapply if_whp_false. unpack_whp. reflexivity. Qed.
+  Proof. eapply if_false_whp. unpack_whp; reflexivity. Qed.
 
   Definition expr_in {t} (x : expr t) : list (expr t) -> expr tbool :=
     (fold_right (fun m acc => x == m \/ acc)%expr #vfalse)%expr.
@@ -1804,7 +1843,6 @@ Section Language.
         let ve := verify@(keygen@($sk), m, s) in
         whp (ve -> expr_in m S).
   End MAC.
-
 
   Section Encrypt.
     Context {tmessage : type}
@@ -2076,6 +2114,269 @@ Section Language.
     Qed.
   End Encrypt.
 
+  Section ProtocolRewriter.
+    Inductive expr_with_hole {hole : type} : type -> Type :=
+    | ewh_const {t} (_:forall eta, interp_type t eta) : expr_with_hole t
+    | ewh_random (idx:positive) : expr_with_hole trand
+    | ewh_adversarial {t1 t2} (_:expr_with_hole t1) : expr_with_hole t2
+    | ewh_app {t1 t2} (_:(t1 -> t2)%etype) (_:expr_with_hole t1)
+      : expr_with_hole t2
+    | ewh_pair {t1 t2} (_:expr_with_hole t1) (_:expr_with_hole t2)
+      : expr_with_hole (t1 * t2)
+    | ewh_hole : expr_with_hole hole.
+
+    Fixpoint fill_hole {hole t}
+             (E : @expr_with_hole hole t) (e : expr hole) : expr t :=
+      match E with
+      | ewh_hole => e
+      (* recurse *)
+      | ewh_const c => #c
+      | ewh_random i => $i
+      | ewh_adversarial x => !@(fill_hole x e)
+      | ewh_app f x => f@(fill_hole x e)
+      | ewh_pair a b => (fill_hole a e, fill_hole b e)
+      end.
+
+    Fixpoint fill_hole_section {hole t} (e : expr t)
+      : @expr_with_hole hole t :=
+      match e with
+      | expr_const c => ewh_const c
+      | expr_random i => ewh_random i
+      | expr_adversarial e => ewh_adversarial (fill_hole_section e)
+      | expr_app f e => ewh_app f (fill_hole_section e)
+      | expr_pair e1 e2 =>
+        ewh_pair (fill_hole_section e1) (fill_hole_section e2)
+      end.
+
+    Lemma fill_hole_section_section {hole} {t} (x : expr hole) (e : expr t) :
+      fill_hole (fill_hole_section e) x = e.
+    Proof.
+      induction e; cbn [fill_hole_section fill_hole]; try reflexivity.
+      - rewrite IHe; reflexivity.
+      - rewrite IHe; reflexivity.
+      - rewrite IHe1; rewrite IHe2; reflexivity.
+    Qed.
+
+    Lemma whp_contract a b : whp b -> whp (a -> b).
+    Proof. unpack_whp; btauto. Qed.
+
+    Lemma whp_mp_cond a b c :
+      whp (a -> b) -> whp (a -> b -> c) -> whp (a -> c).
+    Proof. unpack_whp; btauto. Qed.
+
+    Lemma whp_impl_trans a b c :
+      whp (a -> b) -> whp (b -> c) -> whp (a -> c).
+      intros.
+      assert (whp (a -> b -> c)) by (eapply whp_contract; eauto).
+      eapply whp_mp_cond with (a := a) (b := b) (c := c); eauto.
+    Qed.
+
+    Ltac contract_trans_whp :=
+      match goal with
+      | H0 : whp (?a -> ?b) |- _ =>
+        match goal with
+        | H1 : whp (b -> ?c) |- _ =>
+          assert (whp (a -> c)) by
+              (eapply (whp_impl_trans _ _ _ H0 H1));
+          clear H0; clear H1
+        | H1 : whp (a -> b -> ?c) |- _ =>
+          assert (whp (a -> c)) by
+              (eapply (whp_mp_cond _ _ _ H0 H1));
+          clear H0; clear H1
+        end
+      end.
+
+    Ltac fold_eqwhp :=
+      repeat match goal with
+             | H : whp (?a == ?b) |- _ =>
+               change (whp (a == b)) with (eqwhp a b) in H
+             | |- whp (?a == ?b) => change (whp (a == b)) with (eqwhp a b)
+             end.
+
+    Lemma whp_impl_refl e : whp (e -> e).
+    Proof.
+      unpack_whp; btauto.
+    Qed.
+
+    Lemma fill_eqwhp_internal {hole t}
+          (E : @expr_with_hole hole t) (e1 e2 : expr hole) :
+      whp (e1 == e2 -> fill_hole E e1 == fill_hole E e2).
+    Proof.
+      intros.
+      induction E; cbn [fill_hole];
+        try solve [eapply whp_contract; fold_eqwhp; reflexivity].
+      - assert (whp (fill_hole E e1 == fill_hole E e2 ->
+                     !t2@fill_hole E e1 == !t2@fill_hole E e2))
+          by (eapply Proper_eqwhp_adversarial_internal).
+        contract_trans_whp.
+        eauto.
+      - assert (whp (fill_hole E e1 == fill_hole E e2 ->
+                     f@fill_hole E e1 == f@fill_hole E e2))
+          by (eapply Proper_eqwhp_func_internal).
+        contract_trans_whp.
+        eauto.
+      - assert (whp (fill_hole E1 e1 == fill_hole E1 e2 ->
+                     fill_hole E2 e1 == fill_hole E2 e2 ->
+                     (fill_hole E1 e1, fill_hole E2 e1) ==
+                     (fill_hole E1 e2, fill_hole E2 e2)))
+          by (eapply Proper_eqwhp_pair_internal).
+        do 2 contract_trans_whp.
+        eauto.
+      - eapply whp_impl_refl.
+    Qed.
+
+    Fixpoint choice {t} (m l0 : expr t) (l : list (expr t)) :=
+      match l with
+      | nil => l0
+      | cons l1 l => (eif m == l0 then l0 else choice m l1 l)%expr
+      end.
+
+    Lemma expr_in_singleton {t} (a b:expr t)
+      : eqwhp (expr_in a (b :: nil)) (a == b).
+    Proof. cbn [expr_in fold_right]; unpack_whp; btauto. Qed.
+
+    Lemma whp_split a b : whp (a -> b) -> whp (~a -> b) -> whp b.
+    Proof. unpack_whp. btauto. Qed.
+
+    Lemma whp_switch_cond a b c : eqwhp (a -> b -> c) (b -> a -> c).
+    Proof. unpack_whp. btauto. Qed.
+
+    Lemma whp_impl_eq a b c : eqwhp (a -> b == c) ((a -> b) == (a -> c)).
+    Proof. unpack_whp. btauto. Qed.
+
+    Corollary whp_cond_rew a b c :
+      whp (a -> b == c) ->
+      eqwhp (a -> b) (a -> c).
+    Proof.
+      cbv [eqwhp].
+      merge_whp.
+      rewrite <-whp_impl_eq.
+      eapply whp_impl_refl.
+    Qed.
+
+    Lemma fill_cond_true a {t} (e e' : expr t) (C : expr_with_hole tbool) :
+      eqwhp (a -> fill_hole C (eif a then e else e')) (a -> fill_hole C e).
+    Proof.
+      cbv [eqwhp].
+      rewrite <-whp_impl_eq.
+      assert (whp (a -> (eif a then e else e') == e)) by eapply if_true_internal.
+      pose proof (@fill_eqwhp_internal t _ C (eif a then e else e') e).
+      contract_trans_whp.
+      eauto.
+    Qed.
+
+    Lemma fill_cond_false a {t} (e e' : expr t) (C : expr_with_hole tbool) :
+      eqwhp (~a -> fill_hole C (eif a then e else e')) (~a -> fill_hole C e').
+    Proof.
+      cbv [eqwhp].
+      rewrite <-whp_impl_eq.
+      assert (whp (~a -> (eif a then e else e') == e')) by eapply if_false_internal.
+      pose proof (@fill_eqwhp_internal t _ C (eif a then e else e') e').
+      contract_trans_whp.
+      eauto.
+    Qed.
+
+    Ltac build_context x e :=
+      match e with
+      | x => uconstr:(ewh_hole)
+      | expr_const ?c => uconstr:(ewh_const c)
+      | expr_random ?i => uconstr:(ewh_random i)
+      | expr_adversarial ?e => let E := build_context x e in
+                               uconstr:(ewh_adversarial E)
+      | expr_app ?f ?e => let E := build_context x e in uconstr:(ewh_app f E)
+      | expr_pair ?e1 ?e2 => let E1 := build_context x e1 in
+                             let E2 := build_context x e2 in
+                             uconstr:(ewh_pair E1 E2)
+      | _ => uconstr:(fill_hole_section e)
+      end.
+
+    Ltac rewrite_fill_cond_true :=
+      match goal with
+      | |- context[(?a -> ?d)%expr] =>
+        match d with
+        | context[(eif ?a then ?b else ?c)%expr] =>
+          let C := build_context (eif a then b else c)%expr d in
+          let H := fresh in
+          pose proof (fill_cond_true a b c C) as H;
+          cbn [fill_hole] in H;
+          repeat rewrite fill_hole_section_section in H;
+          rewrite H; clear H
+        end
+      end.
+
+    Ltac rewrite_fill_cond_false :=
+      match goal with
+      | |- context[(~ ?a -> ?d)%expr] =>
+        match d with
+        | context[(eif ?a then ?b else ?c)%expr] =>
+          let C := build_context (eif a then b else c)%expr d in
+          let H := fresh in
+          pose proof (fill_cond_false a b c C) as H;
+          cbn [fill_hole] in H;
+          repeat rewrite fill_hole_section_section in H;
+          rewrite H; clear H
+        end
+      end.
+
+    Lemma choice_eq {t : type} (m l0 : expr t) (l : list (expr t)) :
+      whp (expr_in m (cons l0 l) -> m == choice m l0 l).
+    Proof.
+      revert l0.
+      induction l as [|l1 l]; intros l0.
+      - cbn [choice].
+        rewrite expr_in_singleton.
+        eapply whp_impl_refl.
+      - cbn [expr_in fold_right choice] in IHl |- *.
+        specialize (IHl l1).
+        eapply whp_split with (a := (m == l0)%expr).
+        + rewrite whp_switch_cond.
+          eapply whp_contract.
+          rewrite_fill_cond_true.
+          eapply whp_impl_refl.
+        + assert (forall a b c,
+                     whp (~a -> b -> c) ->
+                     whp (~a -> a \/ b -> c))
+            as disj_hyp_false
+            by (intros; unpack_whp; btauto).
+          eapply disj_hyp_false; clear disj_hyp_false.
+          rewrite_fill_cond_false.
+          eapply whp_contract.
+          eauto.
+    Qed.
+
+    Lemma impl_if a b :
+      eqwhp (a -> b) (eif a then b else #vtrue).
+    Proof. cbv [eqwhp]; unpack_whp. btauto. Qed.
+
+    Lemma rewrite_condition {t : type} b (e1 e1' e2 : expr t) :
+      whp ((b -> e1 == e1') ->
+           (eif b then e1 else e2) == (eif b then e1' else e2)).
+      rewrite impl_if with (a := b).
+      eapply whp_split with (a := b).
+      - repeat rewrite_fill_cond_true.
+        eapply whp_contract.
+        eapply whp_impl_refl.
+      - repeat rewrite_fill_cond_false.
+        do 2 eapply whp_contract.
+        fold_eqwhp; reflexivity.
+    Qed.
+
+    (* todo work in progress *)
+
+    (* if we have a term of the form
+     * eif verify pkey m s then A(m) else B
+     * and we have all the side conditions so that
+     * m in l given verify
+     * we can rewrite this to
+     * eif verify pkey m s then A(choice(l)) else B
+     * where choice(l) is
+     * choice([x]) => x
+     * choice(x::l) => eif m == x then x else choice(l)
+     *
+     * if l is empty, we can rewrite the whole thing to B
+    *)
+  End ProtocolRewriter.
+
   Section ExampleProtocol1.
     Context {tmessage : type}
             {eq_len : (tmessage * tmessage -> tbool)%etype}.
@@ -2180,10 +2481,6 @@ Section Language.
       Definition pK := pkeygen@sK.
       Definition verify_out := sverify@(pK, adv_out_2_msg, adv_out_2_sig).
 
-      Lemma expr_in_singleton {t} (a b:expr t)
-        : eqwhp (expr_in a (b :: nil)) (a == b).
-      Proof. cbn [expr_in fold_right]; unpack_whp; btauto. Qed.
-
       Lemma mac_integrity : whp (check_out -> adv_out_enc == enc_out).
         rewrite <-(expr_in_singleton adv_out_enc enc_out).
         cbv [check_out].
@@ -2216,7 +2513,6 @@ Section Language.
         eapply mspair with (S1 := nil);
           repeat (eauto || econstructor).
       Qed.
-
     End Protocol1Rewrite.
 
     Lemma dec_of_enc :
@@ -2295,7 +2591,5 @@ Section Language.
     Theorem example_proto_1_authenticity :
       whp (verify_out Actual -> adv_out_2_msg Actual == adv_out_msg Actual).
     Admitted.
-
   End ExampleProtocol1.
-
 End Language.

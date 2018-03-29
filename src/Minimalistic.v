@@ -1906,8 +1906,8 @@ Section Language.
       - rewrite IHe1; rewrite IHe2; reflexivity.
     Qed.
 
-    Lemma fill_eqwhp_internal {hole t}
-          (E : @expr_with_hole hole t) (e1 e2 : expr hole) :
+    Lemma fill_eqwhp_internal {hole t} (e1 e2 : expr hole)
+          (E : @expr_with_hole hole t) :
       whp (e1 == e2 -> fill_hole E e1 == fill_hole E e2).
     Proof.
       intros.
@@ -1933,13 +1933,21 @@ Section Language.
       - eapply whp_impl_refl.
     Qed.
 
+    Corollary rewrite_eqwhp_internal {hole} (e1 e2 : expr hole)
+              (E : @expr_with_hole hole tbool) :
+      eqwhp (e1 == e2 -> fill_hole E e1) (e1 == e2 -> fill_hole E e2).
+    Proof.
+      eapply whp_cond_rew.
+      eapply fill_eqwhp_internal.
+    Qed.
+
     Lemma fill_cond_true a {t} (e e' : expr t) (C : expr_with_hole tbool) :
       eqwhp (a -> fill_hole C (eif a then e else e')) (a -> fill_hole C e).
     Proof.
       cbv [eqwhp].
       rewrite <-whp_impl_eq.
       assert (whp (a -> (eif a then e else e') == e)) by eapply if_true_internal.
-      pose proof (@fill_eqwhp_internal t _ C (eif a then e else e') e).
+      pose proof (@fill_eqwhp_internal t _ (eif a then e else e') e C).
       contract_trans_whp.
       eauto.
     Qed.
@@ -1950,7 +1958,7 @@ Section Language.
       cbv [eqwhp].
       rewrite <-whp_impl_eq.
       assert (whp (~a -> (eif a then e else e') == e')) by eapply if_false_internal.
-      pose proof (@fill_eqwhp_internal t _ C (eif a then e else e') e').
+      pose proof (@fill_eqwhp_internal t _ (eif a then e else e') e' C).
       contract_trans_whp.
       eauto.
     Qed.
@@ -1968,6 +1976,17 @@ Section Language.
                            let E2 := build_context x e2 in
                            uconstr:(ewh_pair E1 E2)
     | _ => uconstr:(fill_hole_section e)
+    end.
+
+  Ltac internal_rewrite :=
+    match goal with
+    | |- context[(?e == ?e' -> ?b)%expr] =>
+      let C := build_context e b in
+      let H := fresh in
+      pose proof (rewrite_eqwhp_internal e e' C) as H;
+      cbn [fill_hole] in H;
+      repeat rewrite fill_hole_section_section in H;
+      rewrite H; clear H
     end.
 
   Ltac rewrite_fill_cond_true :=
@@ -2035,9 +2054,7 @@ Section Language.
 
     Definition auth_safe (sk : positive)
                {t} (m : expr t) (l' : list (expr tmessage)) : Prop :=
-      exists l,
-        (forall x, In x l -> In x l') /\
-        auth_safe' sk m l.
+      exists l, auth_safe' sk m l /\ (forall x, In x l -> In x l').
 
     Definition auth_conclusion :=
       forall (sk : positive)
@@ -2084,12 +2101,11 @@ Section Language.
     Lemma auth'_auth : auth'_conclusion -> auth_conclusion.
     Proof.
       cbv [auth'_conclusion auth_conclusion].
-      intros A'C sk s l' m [l [I AS']].
+      intros A'C sk s l' m [l [AS' I]].
       specialize (A'C sk s l m AS').
       pose proof (expr_in_extend m l l' I).
       contract_trans_whp; eauto.
     Qed.
-
   End Authenticity.
 
   Ltac find_auth_safe' tmessage skeygen vkeygen auth verify :=
@@ -2180,71 +2196,6 @@ Section Language.
      * if l is empty, we can rewrite the whole thing to B
     *)
   End AuthRewriting.
-
-  (* TODO: treat Signature and MAC sections as special cases of Authenticity *)
-
-  Section Signature.
-    Context {tmessage : type}
-            {tsignature tskey tpkey : type}
-            {skeygen : (trand -> tskey)%etype} (* secret key generation  *)
-            {pkeygen : (tskey -> tpkey)%etype} (* public part of key *)
-            {sign : (tskey * tmessage -> tsignature)%etype}
-            {verify : (tpkey * tmessage * tsignature -> tbool)%etype}.
-
-    Inductive signature_safe (sk : positive) : forall {t}, expr t -> list (expr tmessage) -> Prop :=
-    | sspkeygen : signature_safe sk (pkeygen@(skeygen@($sk))) nil
-    | sssign m S : signature_safe sk m S -> signature_safe sk (sign@(skeygen@($sk), m)) (m :: S)
-    | ssrand_neq i : i <> sk -> signature_safe sk ($i) nil
-    (* boring recursion: *)
-    | ssconst t v : @signature_safe sk t #v nil
-    | ssfunc {t1 t2} (f : func t1 t2) e S : signature_safe sk e S -> signature_safe sk (f@e) S
-    | ssadv  {t1 t2} (e : expr t1) S : signature_safe sk e S -> signature_safe sk (!t2@e) S
-    | sspair {t1 t2} (e1: expr t1) (e2: expr t2) S1 S2 :
-        signature_safe sk e1 S1 ->
-        signature_safe sk e2 S2 ->
-        signature_safe sk (e1, e2) (S1 ++ S2).
-
-    Definition signature_conclusion :=
-      forall (sk : positive)
-             (s : expr tsignature)
-             (S : list (expr tmessage))
-             (m : expr tmessage),
-        signature_safe sk s S ->
-        (* It's okay if the key was leaked at the time we got the message,
-           just not the signature; hence no "signature_safe" for m. *)
-        let ve := verify@(pkeygen@(skeygen@($sk)), m, s) in
-        whp (ve -> expr_in m S).
-  End Signature.
-
-  Section MAC.
-    Context {tmessage : type}
-            {tmac tkey : type}
-            {keygen : (trand -> tkey)%etype} (* key generation  *)
-            {mac : (tkey * tmessage -> tmac)%etype}
-            {verify : (tkey * tmessage * tmac -> tbool)%etype}.
-
-    Inductive mac_safe (sk : positive) : forall {t}, expr t -> list (expr tmessage) -> Prop :=
-    | msmac m S : mac_safe sk m S -> mac_safe sk (mac@(keygen@($sk), m)) (m :: S)
-    | msverify m s : mac_safe sk (verify@(keygen@($sk), m, s)) nil
-    | msrand_neq (i:positive) : i <> sk -> mac_safe sk ($i) nil
-    (* boring recursion: *)
-    | msconst t v : @mac_safe sk t #v nil
-    | msfunc {t1 t2} (f : func t1 t2) e S : mac_safe sk e S -> mac_safe sk (f@e) S
-    | msadv  {t1 t2} (e : expr t1) S : mac_safe sk e S -> mac_safe sk (!t2@e) S
-    | mspair {t1 t2} (e1: expr t1) (e2: expr t2) S1 S2 :
-        mac_safe sk e1 S1 ->
-        mac_safe sk e2 S2 ->
-        mac_safe sk (e1, e2) (S1 ++ S2).
-
-    Definition mac_conclusion :=
-      forall (sk : positive)
-             (s : expr tmac)
-             (S : list (expr tmessage))
-             (m : expr tmessage),
-        mac_safe sk s S ->
-        let ve := verify@(keygen@($sk), m, s) in
-        whp (ve -> expr_in m S).
-  End MAC.
 
   Section Encrypt.
     Context {tmessage : type}
@@ -2516,7 +2467,6 @@ Section Language.
     Qed.
   End Encrypt.
 
-
   Section ExampleProtocol1.
     Context {tmessage : type}
             {eq_len : (tmessage * tmessage -> tbool)%etype}.
@@ -2528,25 +2478,27 @@ Section Language.
             {sverify : (tpkey * tmessage * tsignature -> tbool)%etype}.
 
     Context {signature_correct :
-               @signature_conclusion
+               @auth_conclusion
                  tmessage
                  tsignature tskey tpkey skeygen pkeygen sign sverify}.
 
+    Context {tmac tmkey : type}
+            {mkeygen : (trand -> tmkey)%etype}
+            {idmkey : (tmkey -> tmkey)%etype}
+            {mac : (tmkey * tmessage -> tmac)%etype}
+            {mverify : (tmkey * tmessage * tmac -> tbool)%etype}.
+
+    Context {mac_correct :
+               @auth_conclusion tmessage tmac tmkey tmkey
+                                mkeygen idmkey mac mverify}.
     Context {tkey tnonce : type}
             {ekeygen : (trand -> tkey)%etype}
             {encrypt : (tkey * tnonce * tmessage -> tmessage)%etype}
             {decrypt : (tkey * tmessage -> tmessage)%etype}.
 
     Context {confidentiality :
-               @confidentiality_conclusion tmessage eq_len tkey tnonce ekeygen encrypt}.
-
-    Context {tmac tmkey : type}
-            {mkeygen : (trand -> tmkey)%etype}
-            {mac : (tmkey * tmessage -> tmac)%etype}
-            {mverify : (tmkey * tmessage * tmac -> tbool)%etype}.
-
-    Context {mac_correct :
-               @mac_conclusion tmessage tmac tmkey mkeygen mac mverify}.
+               @confidentiality_conclusion tmessage eq_len
+                                           tkey tnonce ekeygen encrypt}.
 
     Context {skey2message : (tskey -> tmessage)%etype}
             {message2skey : (tmessage -> tskey)%etype}.
@@ -2597,7 +2549,7 @@ Section Language.
       Definition adv_out_enc := ffst@(ffst@adv_out_1).
       Definition adv_out_mac := fsnd@(ffst@adv_out_1).
       Definition adv_out_msg := fsnd@adv_out_1.
-      Definition check_out := mverify@(sk2, adv_out_enc, adv_out_mac).
+      Definition check_out := mverify@(idmkey@sk2, adv_out_enc, adv_out_mac).
       Definition dec_out :=
         match s with
         | Actual => decrypt@(sk1, adv_out_enc)
@@ -2618,39 +2570,30 @@ Section Language.
       Definition pK := pkeygen@sK.
       Definition verify_out := sverify@(pK, adv_out_2_msg, adv_out_2_sig).
 
-      Lemma mac_integrity : whp (check_out -> adv_out_enc == enc_out).
-        rewrite <-(expr_in_singleton adv_out_enc enc_out).
-        cbv [check_out].
-
-        eapply mac_correct.
-
-        assert (@mac_safe tmessage tmac tmkey mkeygen mac mverify skn2 _ enc_out nil)
-          as enc_out_mac_safe.
-        {
-          repeat match goal with
-                 | [ |- context[match ?s with _ => _ end] ] =>
-                   match type of s with
-                   | protocol1_rewrite_state => destruct s
-                   end
-                 | [ |- mac_safe _ _ _ ] =>
-                   econstructor || eapply mspair with (S1 := nil)
-                 | [ |- _ <> _ ] =>
-                   intro;
-                     repeat (subst;
-                             match goal with
-                             | [ H : NoDup _ |- _ ] =>
-                               inversion_clear H
-                             end;
-                             cbv [In] in *;
-                             eauto)
-                 end.
-        }
-
-        repeat econstructor.
-        eapply mspair with (S1 := nil);
-          repeat (eauto || econstructor).
-      Qed.
     End Protocol1Rewrite.
+
+    Lemma mac_integrity : whp (check_out Actual ->
+                               adv_out_enc Actual == enc_out Actual).
+      rewrite <-(expr_in_singleton (adv_out_enc Actual) (enc_out Actual)).
+      cbv [check_out].
+      eapply mac_correct.
+      eexists.
+      split.
+      - cbv.
+        find_auth_safe' tmessage mkeygen idmkey mac mverify;
+          match goal with
+          | [ |- _ <> _ ] =>
+            intro;
+              repeat (subst;
+                      match goal with
+                      | [ H : NoDup _ |- _ ] =>
+                        inversion_clear H
+                      end;
+                      cbv [In] in *;
+                      eauto)
+          end.
+      - eauto.
+    Qed.
 
     Lemma dec_of_enc :
       whp (check_out Actual -> dec_out Actual == dec_out ElimDec).

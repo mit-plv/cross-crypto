@@ -447,13 +447,11 @@ Section Language.
     if b then inspect_vbool v1 else inspect_vbool v2.
   Proof. destruct b; reflexivity. Qed.
 
+  Create HintDb push_interp discriminated.
   Hint Rewrite
        @interp_fnegb
        @interp_fand
        @interp_f_or
-       @interp_fimpl
-       @interp_f_or
-       @interp_fand
        @interp_fimpl
        @interp_feqb
        @eqb_tbool
@@ -462,6 +460,41 @@ Section Language.
        @inspect_vtrue
        @inspect_vfalse
        : push_interp.
+
+  Section PushIsTrue.
+    Lemma is_true_implb a b :
+      is_true (implb a b) <-> (is_true a -> is_true b).
+      destruct a; destruct b; subst; cbv; eauto.
+    Qed.
+
+    Lemma is_true_eqb {T} {e : EqDec T} (a b : T) :
+      is_true (a ?= b) <-> a = b.
+      destruct e as [? e].
+      cbv.
+      rewrite e.
+      eauto.
+    Qed.
+
+    Lemma is_true_andb a b : is_true (andb a b) <-> (is_true a /\ is_true b).
+      destruct a; destruct b; intuition congruence.
+    Qed.
+
+    Lemma is_true_orb a b : is_true (orb a b) <-> (is_true a \/ is_true b).
+      destruct a; destruct b; intuition congruence.
+    Qed.
+
+    Lemma is_true_negb a : is_true (negb a) <-> ~is_true a.
+      destruct a; cbv; intuition congruence.
+    Qed.
+  End PushIsTrue.
+
+  Create HintDb push_is_true discriminated.
+  Hint Rewrite
+       is_true_implb
+       @is_true_eqb (* TODO COQBUG does removing this @ cause an anomaly? *)
+       is_true_andb
+       is_true_orb
+       is_true_negb : push_is_true.
 
   Ltac goal_always_to_inspect_interp_fixed_true :=
     lazymatch goal with
@@ -1621,9 +1654,10 @@ Section Language.
 
   Ltac fold_eqwhp :=
     repeat match goal with
-           | H : whp (?a == ?b) |- _ =>
+           | H : context[whp (?a == ?b)] |- _ =>
              change (whp (a == b)) with (eqwhp a b) in H
-           | |- whp (?a == ?b) => change (whp (a == b)) with (eqwhp a b)
+           | |- context[whp (?a == ?b)] =>
+             change (whp (a == b)) with (eqwhp a b)
            end.
 
   Section LateInterp.
@@ -1910,27 +1944,13 @@ Section Language.
           (E : @expr_with_hole hole t) :
       whp (e1 == e2 -> fill_hole E e1 == fill_hole E e2).
     Proof.
+      unpack_whp.
+      match goal with
+      | |- ?x = true => change (is_true x)
+      end.
+      autorewrite with push_is_true.
       intros.
-      induction E; cbn [fill_hole];
-        try solve [eapply whp_contract; fold_eqwhp; reflexivity].
-      - assert (whp (fill_hole E e1 == fill_hole E e2 ->
-                     !t2@fill_hole E e1 == !t2@fill_hole E e2))
-          by (eapply Proper_eqwhp_adversarial_internal).
-        contract_trans_whp.
-        eauto.
-      - assert (whp (fill_hole E e1 == fill_hole E e2 ->
-                     f@fill_hole E e1 == f@fill_hole E e2))
-          by (eapply Proper_eqwhp_func_internal).
-        contract_trans_whp.
-        eauto.
-      - assert (whp (fill_hole E1 e1 == fill_hole E1 e2 ->
-                     fill_hole E2 e1 == fill_hole E2 e2 ->
-                     (fill_hole E1 e1, fill_hole E2 e1) ==
-                     (fill_hole E1 e2, fill_hole E2 e2)))
-          by (eapply Proper_eqwhp_pair_internal).
-        do 2 contract_trans_whp.
-        eauto.
-      - eapply whp_impl_refl.
+      induction E; cbn [fill_hole interp_fixed]; congruence.
     Qed.
 
     Corollary rewrite_eqwhp_internal {hole} (e1 e2 : expr hole)
@@ -2656,6 +2676,17 @@ Section Language.
         ≈
         (verify_out RewriteEnc ->
          adv_out_2_msg RewriteEnc == adv_out_msg RewriteEnc).
+      etransitivity.
+      cbv [adv_out_1
+             adv_out_2 adv_out_2_msg adv_out_2_sig
+             adv_out_enc adv_out_mac adv_out_msg
+             check_out dec_msg dec_out enc_out mac_out
+             msK net_in_1 net_in_2 net_in_good pK sK sK'
+             sign_out sk1 sk2 verify_out].
+
+      (* TODO change definitions to let-ins *)
+      (* TODO implement build enc_holes *)
+
     Admitted.
 
     (* Goal Proper (whp ==> whp) indist. *)

@@ -5,4 +5,7 @@ src/Minimalistic.v
 src/RatUtil.v
 src/RewriteUtil.v
 src/Util.v
+src/fmap.v
 src/grw.v
+src/fmap/list_of_pairs.v
+src/fmap/list_of_pairs_correct.v

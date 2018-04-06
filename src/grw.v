@@ -201,6 +201,12 @@ Module type. (* obviously insufficient for real use *)
     | type.m a, type.m b => transport (fun t => P (m t)) a b
     | _, _ => fun _ => None
     end.
+
+  Definition eqb a b :=
+    match transport (fun _ => unit) a b tt with
+    | Some _ => true
+    | None => false
+    end.
 End type.
 Notation type := type.type.
 
@@ -211,11 +217,8 @@ Module simply_typed.
     Local Notation type_interp := (type.interp m).
     Local Notation type_inhabited := (@type.inhabited m M.(@monad.ret)).
     
-    Variant operation : type.type -> Type :=
-    | const {t} (_ : type_interp t) : operation t
-    | id {t} (n : nat) : operation t.
-
-    Definition expr t : Type := (list { u : type.type & operation u} ) * operation t.
+    Variant operation := const (t : type) (v : type_interp t) | id (n : nat).
+    Definition expr : Type := list (type * operation) * operation.
 
     Definition lookup  {P} (ctx : list { t : type.type & P t}) (n : nat) (t : type.type) : option (P t) :=
       match FromNil.nth_error ctx n with
@@ -224,11 +227,15 @@ Module simply_typed.
         @type.transport _ _ _ v
       end.
 
-    Definition interp_operation (ctx : list { t : type.type & type_interp t}) {t} (o : operation t)
+    Definition interp_operation (ctx : list { t : type.type & type_interp t}) (o : operation) t
       : option (m (type_interp t)) :=
-      match o in operation t return option (m (type_interp t)) with
-      | @const t v => Some (M.(monad.ret) v)
-      | @id t n =>
+      match o with
+      | @const tv v =>
+        match type.transport _ tv t v with
+        | Some v => Some (M.(monad.ret) v)
+        | None => None
+        end
+      | @id n =>
         match lookup ctx n t with
         | None => None
         | Some v => Some (M.(monad.ret) v)
@@ -255,34 +262,35 @@ Module simply_typed.
       end.
      *)
 
-    Definition interp_operation_silent ctx {t} o :=
-      match interp_operation ctx o with
+    Definition interp_operation_silent ctx o t :=
+      match interp_operation ctx o t with
       | None => M.(monad.ret) (type_inhabited t)
       | Some v => v
       end.
 
-    Fixpoint interp_silent
+    Fixpoint interp_silent (t : type) (p2 : operation)
+             (p1 : list (type*operation))
              (ctx : list { t : type.type & type_interp t})
-             {t : type.type} (p1 : list { t : type.type & operation t }) (p2 : operation t)
              {struct p1} : m (type_interp t) :=
       match p1 with
-      | (existT _ u o)::p1 =>
-        M.(monad.bind) (interp_operation_silent ctx o) (fun v => interp_silent ((existT _ u v) :: ctx) p1 p2)
-      | nil => interp_operation_silent ctx p2
+      | (u, o)::p1 =>
+        M.(monad.bind) (interp_operation_silent ctx o u) (fun v => interp_silent t p2 p1 ((existT _ u v) :: ctx))
+      | nil => interp_operation_silent ctx p2 t
       end.
 
-    Definition interp_silent_toplevel {t} (p : expr t) :=
-      let (p1, p2) := p in interp_silent nil p1 p2.
+    Definition interp_silent_toplevel (t : type) (p : expr) :=
+      let (p1, p2) := p in interp_silent t p2 p1 nil.
   End WithMonad.
 
   Module _test_interp.
     Local Definition _t1 :
       interp_silent_toplevel (M:=let_in_monad)
-                             (existT _ _ (const (3:type.interp _ type.nat)) ::
-                                     existT _ _ (const (7:type.interp _ type.nat)) ::
-                                     existT _ _ (const (11:type.interp _ type.nat)) ::
+                             type.nat
+                             ((type.nat, const _ (3:type.interp _ type.nat)) ::
+                                     (type.nat, const _ (7:type.interp _ type.nat)) ::
+                                     (type.nat, const _ (11:type.interp _ type.nat)) ::
                                      nil,
-                              @id _ type.nat 1) = 7 := eq_refl.
+                              @id _ 1) = 7 := eq_refl.
   End _test_interp.
 
   Module unification.
@@ -300,35 +308,68 @@ Module simply_typed.
       Local Notation expr := (expr (M:=monad_operations)).
       Local Notation operation := (operation (M:=monad_operations)).
 
-      (* Context {tC} (eC : expr tC). *)
+      (* TODO: universally quantified variables *)
+
+      Definition unify_bound (il ip : nat) (lem2prog : map) (prog2lem : map) : option (map*map) :=
+        match find il lem2prog with
+        | Some ip' =>
+          if Nat.eqb ip' ip
+          then Some (lem2prog, prog2lem) (* nop (reverse map is fine by invariant) *)
+          else None (* confict -- lemma-side variable already used for something else (TODO: handle ret) *)
+        | None => (* unify... *)
+          let lem2prog := add il ip lem2prog in
+          match find ip prog2lem with
+          | Some il' =>
+            if Nat.eqb il il'
+            then Some (lem2prog, prog2lem) (* nop *)
+            else None (* confict -- program-side variable already used for something else (TODO: handle ret) *)
+          | None => (* unify... *)
+            let prog2lem := add ip il prog2lem in
+            Some (lem2prog, prog2lem)
+          end
+        end.
 
       Context (eqb_const : forall t, type_interp t -> type_interp t -> bool).
 
-      Definition unify_operation (unify_operation : forall {tl} (ol : operation tl) (lem2prog : map)
-                 {tp} (op : operation tp) (prog2lem : map)
-        , option (map*map))
-                 {tl} (ol : operation tl) (lem2prog : map)
-                 {tp} (op : operation tp) (prog2lem : map)
-        : option (map*map).
-        refine
-        match type.transport _ tp tl op with
+      Context
+        (lemma : list (type*operation))
+        (program : list (type*operation)).
+
+      Definition unify_operation
+                 (unify_operation : forall
+                     (ol : type * operation) (op : type * operation)
+                     (lem2prog : map) (prog2lem : map),
+                     option (map*map))
+                 (ol : type * operation) (op : type * operation)
+                 (lem2prog : map) (prog2lem : map)
+        : option (map*map) :=
+        let '(tl, ol) := ol in
+        let '(tp, op) := op in
+        match type.transport (fun _ => unit) tp tl tt with
         | None => None
-        | Some op =>
-          match ol in simply_typed.operation tl return operation tl -> _ with
-          | @const _ t cl =>
-            fun (op : operation t) =>
-            match op in simply_typed.operation t return type_interp t -> _ with
-            | const cp =>
-              fun cl =>
-                if eqb_const _ cl cp
-                then Some (lem2prog, prog2lem)
-                else None
-            | _ => _
-            end cl
-          | id il => _
-          end op
+        | Some _ =>
+          match ol, op with
+          | const tvl vl, const tvp vp =>
+            match type.transport _ tvp tvl vp with
+            | None => None
+            | Some vp =>
+              match eqb_const _ vl vp with
+              | false => None
+              | true => Some (lem2prog, prog2lem)
+              end
+            end
+          | id il, id ip =>
+            match unify_bound il ip lem2prog prog2lem with
+            | None => None
+            | Some (lem2prog, prog_lem) =>
+              match FromNil.nth_error lemma il, FromNil.nth_error program ip with
+              | Some ol', Some op' => unify_operation ol' op' lem2prog prog2lem
+              | _, _ => None
+              end
+            end
+          | _, _ => None
+          end
         end.
-      Abort.
     End unification.
   End unification.
 End simply_typed.

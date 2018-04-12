@@ -1961,6 +1961,14 @@ Section Language.
       eapply fill_eqwhp_internal.
     Qed.
 
+    Global Instance Proper_fill_hole {t1 t2} (C : @expr_with_hole t1 t2)
+      : Proper (eqwhp ==> eqwhp) (fill_hole C).
+    Proof.
+      intros x y.
+      eapply whp_impl.
+      eapply fill_eqwhp_internal.
+    Qed.
+
     Lemma fill_cond_true a {t} (e e' : expr t) (C : expr_with_hole tbool) :
       eqwhp (a -> fill_hole C (eif a then e else e')) (a -> fill_hole C e).
     Proof.
@@ -1982,6 +1990,31 @@ Section Language.
       contract_trans_whp.
       eauto.
     Qed.
+
+    Fixpoint compose_hole {t1 t2 t3}
+             (A : @expr_with_hole t1 t2) (B : @expr_with_hole t2 t3)
+      : @expr_with_hole t1 t3 :=
+      match B with
+      | ewh_hole => A
+      (* recurse *)
+      | ewh_const c => ewh_const c
+      | ewh_random i => ewh_random i
+      | ewh_adversarial x => ewh_adversarial (compose_hole A x)
+      | ewh_app f x => ewh_app f (compose_hole A x)
+      | ewh_pair a b => ewh_pair (compose_hole A a) (compose_hole A b)
+      end.
+
+    Lemma fill_compose_hole {t1 t2 t3}
+          (A : @expr_with_hole t1 t2) (B : @expr_with_hole t2 t3)
+          (e : expr t1) :
+      eqwhp (fill_hole (compose_hole A B) e) (fill_hole B (fill_hole A e)).
+    Proof.
+      revert A e; induction B; intros A e; cbn [fill_hole compose_hole];
+        try reflexivity.
+      - rewrite IHB; reflexivity.
+      - rewrite IHB; reflexivity.
+      - rewrite IHB1; rewrite IHB2; reflexivity.
+    Qed.
   End Holes.
 
   Ltac build_context x e :=
@@ -1995,6 +2028,8 @@ Section Language.
     | expr_pair ?e1 ?e2 => let E1 := build_context x e1 in
                            let E2 := build_context x e2 in
                            uconstr:(ewh_pair E1 E2)
+    | fill_hole ?B ?e => let A := build_context x e in
+                         uconstr:(compose_hole A B)
     | _ => uconstr:(fill_hole_section e)
     end.
 
@@ -2004,8 +2039,9 @@ Section Language.
       let C := build_context e b in
       let H := fresh in
       pose proof (rewrite_eqwhp_internal e e' C) as H;
-      cbn [fill_hole] in H;
-      repeat rewrite fill_hole_section_section in H;
+      cbn [fill_hole compose_hole] in H;
+      repeat ((rewrite fill_hole_section_section in H) +
+              (rewrite fill_compose_hole in H));
       rewrite H; clear H
     end.
 
@@ -2017,8 +2053,9 @@ Section Language.
         let C := build_context (eif a then b else c)%expr d in
         let H := fresh in
         pose proof (fill_cond_true a b c C) as H;
-        cbn [fill_hole] in H;
-        repeat rewrite fill_hole_section_section in H;
+        cbn [fill_hole compose_hole] in H;
+        repeat ((rewrite fill_hole_section_section in H) +
+                (rewrite fill_compose_hole in H));
         rewrite H; clear H
       end
     end.
@@ -2031,8 +2068,9 @@ Section Language.
         let C := build_context (eif a then b else c)%expr d in
         let H := fresh in
         pose proof (fill_cond_false a b c C) as H;
-        cbn [fill_hole] in H;
-        repeat rewrite fill_hole_section_section in H;
+        cbn [fill_hole compose_hole] in H;
+        repeat ((rewrite fill_hole_section_section in H) +
+                (rewrite fill_compose_hole in H));
         rewrite H; clear H
       end
     end.
@@ -2128,27 +2166,6 @@ Section Language.
     Qed.
   End Authenticity.
 
-  Ltac find_auth_safe' tmessage skeygen vkeygen auth verify :=
-    repeat
-      match goal with
-      | |- auth_safe' ?sk (auth@(skeygen@$?sk, _)) _ => eapply asauth
-      | |- auth_safe' ?sk (verify@(vkeygen@(skeygen@$?sk)), _, _) _ =>
-        eapply asverify
-      | |- auth_safe' _ ($ _)%expr _ => eapply asrand_neq
-      | |- auth_safe' _ (#_)%expr _ => eapply asconst
-      | |- auth_safe' _ (_@_)%expr _ => eapply asfunc
-      | |- auth_safe' _ (!@_)%expr _ => eapply asadv
-      | |- auth_safe' _ (_, _)%expr ?l =>
-        let l0 := fresh "l" in
-        let l1 := fresh "l" in
-        evar (l0 : list (expr tmessage));
-        evar (l1 : list (expr tmessage));
-        replace l with (l0 ++ l1);
-        subst l0 l1;
-        [eapply aspair|]
-      | |- _ ++ _ = _ => reflexivity
-      end.
-
   Section AuthRewriting.
     Lemma expr_in_singleton {t} (a b:expr t)
       : eqwhp (expr_in a (b :: nil)) (a == b).
@@ -2170,7 +2187,7 @@ Section Language.
         eapply whp_impl_refl.
       - cbn [expr_in fold_right choice] in IHl |- *.
         specialize (IHl l1).
-        eapply whp_split with (a := (m == l0)%expr).
+        eapply (whp_split (m == l0)).
         + rewrite whp_switch_cond.
           eapply whp_contract.
           rewrite_fill_cond_true.
@@ -2189,8 +2206,8 @@ Section Language.
     Lemma rewrite_condition {t : type} b (e1 e1' e2 : expr t) :
       whp ((b -> e1 == e1') ->
            (eif b then e1 else e2) == (eif b then e1' else e2)).
-      rewrite impl_if with (a := b).
-      eapply whp_split with (a := b).
+      rewrite (impl_if b).
+      eapply (whp_split b).
       - repeat rewrite_fill_cond_true.
         eapply whp_contract.
         eapply whp_impl_refl.
@@ -2199,7 +2216,75 @@ Section Language.
         fold_eqwhp; reflexivity.
     Qed.
 
-    (* todo work in progress *)
+    Context {tmessage ttag tskey tvkey : type}
+            {skeygen : (trand -> tskey)%etype}
+            {vkeygen : (tskey -> tvkey)%etype}
+            {auth : (tskey * tmessage -> ttag)%etype}
+            {verify : (tvkey * tmessage * ttag -> tbool)%etype}
+            {auth_correct : @auth_conclusion tmessage ttag tskey tvkey
+                                             skeygen vkeygen auth verify}.
+    Fixpoint choice_ctx {t1 t2} m (C : expr_with_hole t2)
+             (l0 : expr t1) (l : list (expr t1)) :=
+      match l with
+      | nil => fill_hole C l0
+      | cons l1 l => (eif m == l0
+                      then fill_hole C l0
+                      else choice_ctx m C l1 l)%expr
+      end.
+
+    Lemma fill_if_comm {t1 t2} (C : expr_with_hole t2) a (b c : expr t1) :
+      eqwhp (fill_hole C (eif a then b else c))
+            (eif a then fill_hole C b else fill_hole C c).
+    Proof.
+      eapply (whp_split a);
+        [do 2 rewrite_fill_cond_true | do 2 rewrite_fill_cond_false];
+        eapply whp_contract; fold_eqwhp; reflexivity.
+    Qed.
+
+    Lemma choice_ctx_as_fill {t1 t2}
+          m (C : expr_with_hole t2) l0 (l : list (expr t1)) :
+      eqwhp (choice_ctx m C l0 l)
+            (fill_hole C (choice m l0 l)).
+    Proof.
+      revert l0.
+      induction l; intros l0.
+      - reflexivity.
+      - cbn [choice_ctx choice].
+        rewrite IHl.
+        rewrite fill_if_comm; reflexivity.
+    Qed.
+
+    Let auth_safe := @auth_safe tmessage ttag tskey tvkey
+                                skeygen vkeygen auth verify.
+
+    Lemma rewrite_verify sk (s : expr ttag) l0 l m {t}
+          (A : expr_with_hole t) (B : expr t) :
+      auth_safe sk _ s (cons l0 l) ->
+      let ve := verify@(vkeygen@(skeygen@($sk)), m, s) in
+      eqwhp (eif ve then fill_hole A m else B)
+            (eif ve then choice_ctx m A l0 l else B).
+    Proof.
+      intros.
+
+      assert (whp (ve -> fill_hole A m == choice_ctx m A l0 l)).
+      {
+        rewrite choice_ctx_as_fill.
+        assert (whp (ve -> m == choice m l0 l)).
+        {
+          assert (whp (ve -> expr_in m (cons l0 l)))
+            by eauto using auth_correct.
+          pose proof choice_eq m l0 l.
+          contract_trans_whp; eauto.
+        }
+        assert (whp (m == choice m l0 l ->
+                     fill_hole A m == fill_hole A (choice m l0 l)))
+          by eapply fill_eqwhp_internal.
+        contract_trans_whp; eauto.
+      }
+      eapply whp_impl.
+      - eapply rewrite_condition.
+      - eauto.
+    Qed.
 
     (* if we have a term of the form
      * eif verify pkey m s then A(m) else B
@@ -2590,18 +2675,21 @@ Section Language.
       Definition pK := pkeygen@sK.
       Definition verify_out := sverify@(pK, adv_out_2_msg, adv_out_2_sig).
 
+      Definition auth_goal := (verify_out -> adv_out_2_msg == adv_out_msg)%expr.
     End Protocol1Rewrite.
 
-    Lemma mac_integrity : whp (check_out Actual ->
+    Example mac_integrity : whp (check_out Actual ->
                                adv_out_enc Actual == enc_out Actual).
+    Proof.
       rewrite <-(expr_in_singleton (adv_out_enc Actual) (enc_out Actual)).
       cbv [check_out].
       eapply mac_correct.
       eexists.
       split.
       - cbv.
-        find_auth_safe' tmessage mkeygen idmkey mac mverify;
+        repeat
           match goal with
+          | |- auth_safe' _ _ _ => econstructor
           | [ |- _ <> _ ] =>
             intro;
               repeat (subst;
@@ -2615,50 +2703,66 @@ Section Language.
       - eauto.
     Qed.
 
-    Lemma dec_of_enc :
-      whp (check_out Actual -> dec_out Actual == dec_out ElimDec).
-    Proof.
-      cbn.
-      match goal with |- whp ?X => pose X end.
-      compute in e.
+    Example rewrite_actual : exists e, whp (auth_goal Actual == e).
+      eexists.
+      cbv beta iota delta -[whp].
+      (* note that we have decrypt(!encrypt(...))
+       * with the adversary in between *)
+      lazymatch goal with
+      | |- whp ?x =>
+        lazymatch x with
+        | context[(eif mverify@(idmkey@(mkeygen@($?sk)), ?m, ?s) then ?T else ?E)%expr] =>
+          let c := constr:(mverify@(idmkey@(mkeygen@($sk)), m, s)) in
+          let i := constr:((eif c then T else E)%expr) in
+            let Ti := type of i in
+            let i' := fresh "i" in
+            evar (i' : Ti);
+              let H := fresh in
+              assert (eqwhp i i') as H;
+              [
+                subst i';
+                let A := build_context m T in
+                let H := fresh in
+                assert (eqwhp T (fill_hole A m)) as H
+                by (cbn [fill_hole compose_hole];
+                    repeat ((rewrite fill_hole_section_section) +
+                            (rewrite fill_compose_hole));
+                    reflexivity);
+                rewrite H; clear H;
+                eapply rewrite_verify
+              |
+              let C := build_context i x in
+              let H' := fresh in
+              assert (eqwhp x (fill_hole C i)) as H'
+                  by (cbn [fill_hole compose_hole];
+                      repeat ((rewrite fill_hole_section_section) +
+                              (rewrite fill_compose_hole));
+                      reflexivity);
+              rewrite H'; clear H';
+              rewrite H; clear H
+              ]
+        end
+      end.
+      {
+        eexists.
+        split.
+        - repeat econstructor;
+            match goal with
+            | |- _ <> _ => admit
+            end.
+        - cbn [app].
+          intros.
+          eauto.
+          (* todo deduplicate *)
+      }
+      subst i.
+      cbn [fill_hole compose_hole choice_ctx];
+        repeat ((rewrite fill_hole_section_section) +
+                (rewrite fill_compose_hole)).
 
-      assert (forall t2 t3 a (b b' : expr t2) (c c' : expr t3),
-                 whp (a -> b == b') ->
-                 whp (a -> c == c') ->
-                 whp (a -> (b, c) == (b', c'))) as PP by admit.
-      assert (forall a t1 t2 (f : func t1 t2) b b',
-                 whp (a -> b == b') ->
-                 whp (a -> f@b == f@b')) as PFA by admit.
-      assert (forall a a', eqwhp a a' -> whp a -> whp a') as PEW by apply Proper_whp_eqwhp.
-      pose proof (PEW (check_out Actual -> decrypt@(sk1, enc_out Actual) == msK)%expr (check_out Actual -> decrypt@(sk1, adv_out_enc Actual) == msK)%expr).
-      apply H.
-      clear H.
-      symmetry.
-      assert (forall a b b',
-                 whp (a -> b == b') ->
-                 eqwhp (a -> b) (a -> b')) as PEI by admit.
-      apply PEI.
-      pose proof (PFA (check_out Actual) _ _ feqb (decrypt@(sk1, adv_out_enc Actual), msK) (decrypt@(sk1, enc_out Actual), msK))%expr.
-      apply H.
-      clear H.
-      apply PP.
-      apply PFA.
-      apply PP.
-      admit.
-      apply mac_integrity.
-      admit.
-
-      cbv [enc_out].
-
-      assert (forall sk n m, eqwhp (decrypt@(ekeygen@$sk, encrypt@(ekeygen@$sk, n, m)))%expr m) as DE by admit.
-
-      assert (forall a b, whp b -> whp (a -> b)%expr) by admit.
-      apply H0.
-
-      cbv [eqwhp] in DE.
-      cbv [sk1].
-      apply DE.
-    Admitted.
+      (* victory! we now have decrypt(encrypt) instead of decrypt(!encrypt) *)
+      (* todo wip *)
+    Abort.
 
     Lemma elimdec_verify :
       whp (check_out Actual -> verify_out Actual == verify_out ElimDec).
@@ -2671,18 +2775,9 @@ Section Language.
     Admitted.
 
     Lemma rewrite_enc :
-      (verify_out ElimDec ->
-       adv_out_2_msg ElimDec == adv_out_msg ElimDec)
-        ≈
-        (verify_out RewriteEnc ->
-         adv_out_2_msg RewriteEnc == adv_out_msg RewriteEnc).
+      auth_goal ElimDec ≈ auth_goal RewriteEnc.
       etransitivity.
-      cbv [adv_out_1
-             adv_out_2 adv_out_2_msg adv_out_2_sig
-             adv_out_enc adv_out_mac adv_out_msg
-             check_out dec_msg dec_out enc_out mac_out
-             msK net_in_1 net_in_2 net_in_good pK sK sK'
-             sign_out sk1 sk2 verify_out].
+      cbv beta iota delta -[indist].
 
       (* TODO change definitions to let-ins *)
       (* TODO implement build enc_holes *)
@@ -2692,8 +2787,8 @@ Section Language.
     (* Goal Proper (whp ==> whp) indist. *)
 
     Lemma authenticity_after_rewrite :
-      whp (verify_out RewriteEnc ->
-           adv_out_2_msg RewriteEnc == adv_out_msg RewriteEnc).
+      whp (auth_goal RewriteEnc).
+      cbv beta iota delta -[whp].
     Admitted.
 
     Lemma verify_impl_check : whp (verify_out Actual -> check_out Actual).

@@ -375,6 +375,7 @@ Module simply_typed.
 End simply_typed.
 
 
+(*
 
 
 (* TODO: switch to nil-based indexing below *)
@@ -574,6 +575,7 @@ Module flatprog.
     Fixpoint of_prog {tctx t} (p : prog.prog M tctx t) : prog tctx t. Admitted.
   End WithMonad.
 End flatprog.
+*)
 
 (*
 monad rewriting unification notes:

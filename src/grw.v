@@ -1,5 +1,19 @@
 Require CrossCrypto.fmap.
 
+(* TODO: moveme *)
+Fixpoint Fixn {A B} (n:nat) (f : (A -> option B) -> A -> option B) {struct n}
+  : A -> option B :=
+  match n with
+  | O => f (fun _ => None)
+  | S n => f (Fixn n f)
+  end.
+Fixpoint Fixn_silent {A B} (inhabited_B:B) (n:nat) (f : (A -> B) -> A -> B) {struct n}
+  : A -> B :=
+  match n with
+  | O => f (fun _ => inhabited_B)
+  | S n => f (Fixn_silent inhabited_B n f)
+  end.
+
 Module monad.
   Record monad :=
     {
@@ -335,247 +349,38 @@ Module simply_typed.
         (lemma : list (type*operation))
         (program : list (type*operation)).
 
-      Definition unify_operation
-                 (unify_operation : forall
-                     (ol : type * operation) (op : type * operation)
-                     (lem2prog : map) (prog2lem : map),
-                     option (map*map))
-                 (ol : type * operation) (op : type * operation)
-                 (lem2prog : map) (prog2lem : map)
-        : option (map*map) :=
-        let '(tl, ol) := ol in
-        let '(tp, op) := op in
-        match type.transport (fun _ => unit) tp tl tt with
-        | None => None
-        | Some _ =>
-          match ol, op with
-          | const tvl vl, const tvp vp =>
-            match type.transport _ tvp tvl vp with
-            | None => None
-            | Some vp =>
-              match eqb_const _ vl vp with
-              | false => None
-              | true => Some (lem2prog, prog2lem)
+      Definition unify_operation : (type * operation) * (type * operation) * map * map -> option (map*map) :=
+        Fixn (length program) (fun recurse '(ol, op, lem2prog, prog2lem) =>
+          let '(tl, ol) := ol in
+          let '(tp, op) := op in
+          match type.transport (fun _ => unit) tp tl tt with
+          | None => None
+          | Some _ =>
+            match ol, op with
+            | const tvl vl, const tvp vp =>
+              match type.transport _ tvp tvl vp with
+              | None => None
+              | Some vp =>
+                match eqb_const _ vl vp with
+                | false => None
+                | true => Some (lem2prog, prog2lem)
+                end
               end
-            end
-          | id il, id ip =>
-            match unify_bound il ip lem2prog prog2lem with
-            | None => None
-            | Some (lem2prog, prog_lem) =>
-              match FromNil.nth_error lemma il, FromNil.nth_error program ip with
-              | Some ol', Some op' => unify_operation ol' op' lem2prog prog2lem
-              | _, _ => None
+            | id il, id ip =>
+              match unify_bound il ip lem2prog prog2lem with
+              | None => None
+              | Some (lem2prog, prog_lem) =>
+                match nth_error lemma il, nth_error program ip with
+                | Some ol', Some op' => recurse (ol', op', lem2prog, prog2lem)
+                | _, _ => None
+                end
               end
+            | _, _ => None
             end
-          | _, _ => None
-          end
-        end.
+          end).
     End unification.
   End unification.
 End simply_typed.
-
-
-(*
-
-
-(* TODO: switch to nil-based indexing below *)
-  
-
-
-Section i.
-  Context (i : nat).
-  Definition retnegb x : option bool := Some (negb x).
-  Fixpoint interp_option_bool (p : list (nat + bool)) (c : list bool) : option bool :=
-    match p with
-    | nil => nth_error c i
-    | i::p' =>
-      match i with
-      | inr b => option_monad.bind (Some b) (fun x => interp_option_bool p' (x::c))
-      | inl n =>
-        match nth_error c n with
-        | None => None (* TODO: ??? *)
-        | Some x => option_monad.bind (retnegb x) (fun x => interp_option_bool p' (x::c))
-        end
-      end
-    end.
-End i.
-
-Module phoasprog.
-  Section with_typecodes.
-    Context {type : Type} {interp_type : type -> Type}.
-    Section with_var.
-      Context {var : type -> Type}.
-      Inductive pure : type -> Type := (* obviously insufficient for real use *)
-      | const {t} (_ : interp_type t) : pure t
-      | ref {t} (_ : var t) : pure t.
-      Inductive monadic : type  -> Type :=
-      | ret {t} (_ : pure t) : monadic t
-      | bind {A B} (a : monadic A) (f : var A -> monadic B) : monadic B.
-    End with_var.
-    Global Arguments pure : clear implicits.
-    Global Arguments monadic : clear implicits.
-
-    Section with_monad.
-      Context (M : monad).
-      Let m := monad.m M.
-      Let ret {T} := @monad.ret M T.
-      Let bind {A B} := @monad.bind M A B.
-
-      Definition interp_pure {t} (e : pure interp_type t) : interp_type t :=
-        match e with
-        | const c => c
-        | ref v => v
-        end.
-      Fixpoint interp_monadic {t} (e : monadic interp_type t) : m (interp_type t) :=
-        match e with
-        | with_typecodes.ret a => ret (interp_pure a)
-        | with_typecodes.bind a f => bind (interp_monadic a) (fun a => interp_monadic (f a))
-        end.
-    End with_monad.
-  End with_typecodes.
-  Global Arguments pure : clear implicits.
-  Global Arguments monadic : clear implicits.
-
-  Section Example.
-    Local Notation ret := Some.
-    Local Notation "x <- a ; f" :=
-      (option_monad.bind a (fun x => f))
-        (at level 70, a at next level, right associativity, format "'[v' x  <-  a ; '/' f ']'").
-    Import ListNotations.
-    Goal False.
-      let x := eval cbv -[retnegb option_monad.bind option_monad.ret] in (interp_option_bool 0 [inr true; inl 0; inl 0; inl 2; inl 1] []) in
-      pose x.
-    Abort.
-  End Example.
-End phoasprog.
-
-Module Import MOVEME.
-  Fixpoint fin n :=
-    match n with
-    | O => Empty_set
-    | S n => option (fin n)
-    end.
-
-  Module fin.
-    Fixpoint of_nat n m : option (fin n) :=
-      match n with
-      | O => None
-      | S n =>
-        match m with
-        | O => Some None
-        | S m => Some (of_nat n m)
-        end
-      end.
-  End fin.
-  
-  Module List.
-    Fixpoint nth_fin {A} (l : list A) {struct l} : forall (n : fin (length l)), A :=
-      match l with
-      | nil => fun member_of_empty_set => match member_of_empty_set with end
-      | a :: l =>
-        fun i =>
-          match i with
-          | None => a
-          | Some i => nth_fin l i
-          end
-      end.
-  End List.
-
-  Module hlist.
-    Fixpoint hlist {tc} interp_tc (ts : list tc) : Type :=
-      match ts with
-      | nil => unit
-      | t::ts => (interp_tc t * hlist interp_tc ts)
-      end.
-
-    Definition hhd {tc} {interp_tc : tc -> Type} {t ts} (xs : hlist interp_tc (t :: ts)) : interp_tc t :=
-      let (x, _) := xs in x.
-    Definition htl {tc} {interp_tc : tc -> Type} {t ts} (xs : hlist interp_tc (t :: ts)) : hlist interp_tc ts :=
-      let (_, xs) := xs in xs.
-
-    Fixpoint nth_fin {tc interp_tc} {ts : list tc} {struct ts} : forall (n : fin (length ts)) (xs : hlist interp_tc ts), interp_tc (List.nth_fin ts n) :=
-      match ts with
-      | nil => fun member_of_empty_set => match member_of_empty_set with end
-      | t::ts =>
-        fun n =>
-          match n with
-          | Some n =>
-            fun xs =>
-              nth_fin n (htl xs)
-          | None => hhd
-          end
-      end.
-  End hlist.
-End MOVEME.
-
-Module prog.
-  Section WithMonad.
-    Context (M : monad.monad).
-    Let m := M.(monad.m).
-    Let type_interp := type.interp m.
-
-    Inductive expr : forall (tctx : list type) (t : type), Type :=
-    | const {tctx t} (_ : type_interp t) : expr tctx t
-    | ret {tctx t} (_ : expr tctx t) : expr tctx (type.m t)
-    | ref {tctx} (n : fin (length tctx)) : expr tctx (List.nth_fin tctx n)
-    | sub {tctx t} (_ : prog tctx t) : expr tctx (type.m t)
-    with
-    prog : forall (tctx : list type) (t : type), Type :=
-    | bind {u tctx} (_ : expr tctx (type.m u)) {t} (_ : prog (u::tctx) t) : prog tctx t
-    | final {tctx t} (_ : expr tctx (type.m t)) : prog tctx t
-    .
-    
-    Import hlist.
-    Fixpoint interp_expr {tctx t} (e : expr tctx t) {struct e} : forall (ctx : hlist type_interp tctx), type_interp t :=
-      match e with
-      | const v => fun _ => v
-      | ret e => fun ctx => M.(monad.ret) (interp_expr e ctx)
-      | ref n => nth_fin n
-      | sub p => interp_prog p
-      end
-    with
-    interp_prog {tctx t} (p : prog tctx t) {struct p} : forall (ctx : hlist type_interp tctx), type_interp (type.m t) :=
-      match p with
-      | bind e p => fun ctx => M.(monad.bind) (interp_expr e ctx) (fun x => interp_prog p (x, ctx))
-      | final e => interp_expr e
-      end.
-  End WithMonad.
-End prog.
-
-
-Module flatprog.
-  Section WithMonad.
-    Context (M : monad.monad).
-    Let m := M.(monad.m).
-    Let type_interp := type.interp m.
-
-    Variant operation : forall (tctx : list type) (t : type), Type :=
-    | const {tctx t} (_ : type_interp t) : operation tctx t
-    | id {tctx} (n : fin (length tctx)) : operation tctx (List.nth_fin tctx n)
-    .
-
-    Inductive prog : forall (tctx : list type) (t : type), Type :=
-    | bind {u tctx} (_ : operation tctx u) {t} (_ : prog (u::tctx) t) : prog tctx t
-    | final {tctx t} (_ : operation tctx t) : prog tctx t
-    .
-    
-    Import hlist.
-    Definition interp_operation {tctx t} (e : operation tctx t) : forall (ctx : hlist type_interp tctx), type_interp (type.m t) :=
-      match e with
-      | const v => fun _ => M.(monad.ret) v
-      | id n => fun ctx => M.(monad.ret) (nth_fin n ctx)
-      end.
-
-    Fixpoint interp {tctx t} (p : prog tctx t) {struct p} : forall (ctx : hlist type_interp tctx), type_interp (type.m t) :=
-      match p with
-      | bind o p => fun ctx => M.(monad.bind) (interp_operation o ctx) (fun x => interp p (x, ctx))
-      | final o => interp_operation o
-      end.
-
-    Fixpoint of_prog {tctx t} (p : prog.prog M tctx t) : prog tctx t. Admitted.
-  End WithMonad.
-End flatprog.
-*)
 
 (*
 monad rewriting unification notes:

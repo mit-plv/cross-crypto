@@ -4,6 +4,7 @@ Require Import Coq.MSets.MSetPositive Coq.FSets.FMapPositive.
 Require Import FCF.FCF FCF.Asymptotic FCF.EqDec.
 Require Import CrossCrypto.Util CrossCrypto.RatUtil CrossCrypto.RewriteUtil CrossCrypto.MapUtil.
 Require Import Lia. (* TODO: remove after removing not_negligible_const *)
+Require Import Coq.derive.Derive.
 
 Require Import Coq.btauto.Btauto.
 Lemma eqb_bool a b : (a ?= b) = negb (xorb a b). Admitted.
@@ -1920,21 +1921,21 @@ Section Language.
       | ewh_pair a b => (fill_hole a e, fill_hole b e)
       end.
 
-    Fixpoint fill_hole_section {hole t} (e : expr t)
+    Fixpoint without_holes {hole t} (e : expr t)
       : @expr_with_hole hole t :=
       match e with
       | expr_const c => ewh_const c
       | expr_random i => ewh_random i
-      | expr_adversarial e => ewh_adversarial (fill_hole_section e)
-      | expr_app f e => ewh_app f (fill_hole_section e)
+      | expr_adversarial e => ewh_adversarial (without_holes e)
+      | expr_app f e => ewh_app f (without_holes e)
       | expr_pair e1 e2 =>
-        ewh_pair (fill_hole_section e1) (fill_hole_section e2)
+        ewh_pair (without_holes e1) (without_holes e2)
       end.
 
-    Lemma fill_hole_section_section {hole} {t} (x : expr hole) (e : expr t) :
-      fill_hole (fill_hole_section e) x = e.
+    Lemma fill_without_holes {hole} {t} (x : expr hole) (e : expr t) :
+      fill_hole (without_holes e) x = e.
     Proof.
-      induction e; cbn [fill_hole_section fill_hole]; try reflexivity.
+      induction e; cbn [without_holes fill_hole]; try reflexivity.
       - rewrite IHe; reflexivity.
       - rewrite IHe; reflexivity.
       - rewrite IHe1; rewrite IHe2; reflexivity.
@@ -1991,7 +1992,7 @@ Section Language.
       eauto.
     Qed.
 
-    Fixpoint compose_hole {t1 t2 t3}
+    Fixpoint refine_hole {t1 t2 t3}
              (A : @expr_with_hole t1 t2) (B : @expr_with_hole t2 t3)
       : @expr_with_hole t1 t3 :=
       match B with
@@ -1999,17 +2000,17 @@ Section Language.
       (* recurse *)
       | ewh_const c => ewh_const c
       | ewh_random i => ewh_random i
-      | ewh_adversarial x => ewh_adversarial (compose_hole A x)
-      | ewh_app f x => ewh_app f (compose_hole A x)
-      | ewh_pair a b => ewh_pair (compose_hole A a) (compose_hole A b)
+      | ewh_adversarial x => ewh_adversarial (refine_hole A x)
+      | ewh_app f x => ewh_app f (refine_hole A x)
+      | ewh_pair a b => ewh_pair (refine_hole A a) (refine_hole A b)
       end.
 
-    Lemma fill_compose_hole {t1 t2 t3}
+    Lemma fill_refine_hole {t1 t2 t3}
           (A : @expr_with_hole t1 t2) (B : @expr_with_hole t2 t3)
           (e : expr t1) :
-      eqwhp (fill_hole (compose_hole A B) e) (fill_hole B (fill_hole A e)).
+      eqwhp (fill_hole (refine_hole A B) e) (fill_hole B (fill_hole A e)).
     Proof.
-      revert A e; induction B; intros A e; cbn [fill_hole compose_hole];
+      revert A e; induction B; intros A e; cbn [fill_hole refine_hole];
         try reflexivity.
       - rewrite IHB; reflexivity.
       - rewrite IHB; reflexivity.
@@ -2029,8 +2030,8 @@ Section Language.
                            let E2 := build_context x e2 in
                            uconstr:(ewh_pair E1 E2)
     | fill_hole ?B ?e => let A := build_context x e in
-                         uconstr:(compose_hole A B)
-    | _ => uconstr:(fill_hole_section e)
+                         uconstr:(refine_hole A B)
+    | _ => uconstr:(without_holes e)
     end.
 
   Ltac internal_rewrite :=
@@ -2039,9 +2040,9 @@ Section Language.
       let C := build_context e b in
       let H := fresh in
       pose proof (rewrite_eqwhp_internal e e' C) as H;
-      cbn [fill_hole compose_hole] in H;
-      repeat ((rewrite fill_hole_section_section in H) +
-              (rewrite fill_compose_hole in H));
+      cbn [fill_hole refine_hole] in H;
+      repeat ((rewrite fill_without_holes in H) +
+              (rewrite fill_refine_hole in H));
       rewrite H; clear H
     end.
 
@@ -2053,9 +2054,9 @@ Section Language.
         let C := build_context (eif a then b else c)%expr d in
         let H := fresh in
         pose proof (fill_cond_true a b c C) as H;
-        cbn [fill_hole compose_hole] in H;
-        repeat ((rewrite fill_hole_section_section in H) +
-                (rewrite fill_compose_hole in H));
+        cbn [fill_hole refine_hole] in H;
+        repeat ((rewrite fill_without_holes in H) +
+                (rewrite fill_refine_hole in H));
         rewrite H; clear H
       end
     end.
@@ -2068,9 +2069,9 @@ Section Language.
         let C := build_context (eif a then b else c)%expr d in
         let H := fresh in
         pose proof (fill_cond_false a b c C) as H;
-        cbn [fill_hole compose_hole] in H;
-        repeat ((rewrite fill_hole_section_section in H) +
-                (rewrite fill_compose_hole in H));
+        cbn [fill_hole refine_hole] in H;
+        repeat ((rewrite fill_without_holes in H) +
+                (rewrite fill_refine_hole in H));
         rewrite H; clear H
       end
     end.
@@ -2221,8 +2222,8 @@ Section Language.
             {vkeygen : (tskey -> tvkey)%etype}
             {auth : (tskey * tmessage -> ttag)%etype}
             {verify : (tvkey * tmessage * ttag -> tbool)%etype}
-            {auth_correct : @auth_conclusion tmessage ttag tskey tvkey
-                                             skeygen vkeygen auth verify}.
+            (auth_correct : @auth_conclusion tmessage ttag tskey tvkey
+                                             skeygen vkeygen auth verify).
     Fixpoint choice_ctx {t1 t2} m (C : expr_with_hole t2)
              (l0 : expr t1) (l : list (expr t1)) :=
       match l with
@@ -2256,28 +2257,30 @@ Section Language.
 
     Let auth_safe := @auth_safe tmessage ttag tskey tvkey
                                 skeygen vkeygen auth verify.
-
-    Lemma rewrite_verify sk (s : expr ttag) l0 l m {t}
-          (A : expr_with_hole t) (B : expr t) :
-      auth_safe sk _ s (cons l0 l) ->
-      let ve := verify@(vkeygen@(skeygen@($sk)), m, s) in
-      eqwhp (eif ve then fill_hole A m else B)
-            (eif ve then choice_ctx m A l0 l else B).
+    Lemma rewrite_verify
+          {sk tag m}
+          {t e} {C : expr_with_hole t} (Hhandler : eqwhp e (fill_hole C m))
+          {choice0 choices} (Hchoices : auth_safe sk _ tag (cons choice0 choices ))
+          {err : expr t}
+      : let ve := verify@(vkeygen@(skeygen@($sk)), m, tag) in
+        eqwhp (eif ve then e else err)
+              (eif ve then choice_ctx m C choice0 choices else err).
     Proof.
       intros.
+      rewrite Hhandler.
 
-      assert (whp (ve -> fill_hole A m == choice_ctx m A l0 l)).
+      assert (whp (ve -> fill_hole C m == choice_ctx m C choice0 choices)).
       {
         rewrite choice_ctx_as_fill.
-        assert (whp (ve -> m == choice m l0 l)).
+        assert (whp (ve -> m == choice m choice0 choices)).
         {
-          assert (whp (ve -> expr_in m (cons l0 l)))
+          assert (whp (ve -> expr_in m (cons choice0 choices)))
             by eauto using auth_correct.
-          pose proof choice_eq m l0 l.
+          pose proof choice_eq m choice0 choices.
           contract_trans_whp; eauto.
         }
-        assert (whp (m == choice m l0 l ->
-                     fill_hole A m == fill_hole A (choice m l0 l)))
+        assert (whp (m == choice m choice0 choices ->
+                     fill_hole C m == fill_hole C (choice m choice0 choices)))
           by eapply fill_eqwhp_internal.
         contract_trans_whp; eauto.
       }
@@ -2285,21 +2288,6 @@ Section Language.
       - eapply rewrite_condition.
       - eauto.
     Qed.
-
-    (* if we have a term of the form
-     * eif verify pkey m s then A(m) else B
-     * and we have all the side conditions so that
-     * m in l given verify
-     * we can rewrite this to
-     * eif verify pkey m s then A(choice(l)) else B
-     * where choice(l) is
-     * choice([x]) => x
-     * choice(x::l) => eif m == x then x else choice(l)
-     *
-     * finally, we should further rewrite it to commute A past the choice
-     *
-     * if l is empty, we can rewrite the whole thing to B
-    *)
   End AuthRewriting.
 
   Section Encrypt.
@@ -2703,66 +2691,85 @@ Section Language.
       - eauto.
     Qed.
 
-    Example rewrite_actual : exists e, whp (auth_goal Actual == e).
-      eexists.
-      cbv beta iota delta -[whp].
-      (* note that we have decrypt(!encrypt(...))
-       * with the adversary in between *)
-      lazymatch goal with
-      | |- whp ?x =>
-        lazymatch x with
-        | context[(eif mverify@(idmkey@(mkeygen@($?sk)), ?m, ?s) then ?T else ?E)%expr] =>
-          let c := constr:(mverify@(idmkey@(mkeygen@($sk)), m, s)) in
-          let i := constr:((eif c then T else E)%expr) in
-            let Ti := type of i in
-            let i' := fresh "i" in
-            evar (i' : Ti);
-              let H := fresh in
-              assert (eqwhp i i') as H;
-              [
-                subst i';
-                let A := build_context m T in
-                let H := fresh in
-                assert (eqwhp T (fill_hole A m)) as H
-                by (cbn [fill_hole compose_hole];
-                    repeat ((rewrite fill_hole_section_section) +
-                            (rewrite fill_compose_hole));
-                    reflexivity);
-                rewrite H; clear H;
-                eapply rewrite_verify
-              |
-              let C := build_context i x in
-              let H' := fresh in
-              assert (eqwhp x (fill_hole C i)) as H'
-                  by (cbn [fill_hole compose_hole];
-                      repeat ((rewrite fill_hole_section_section) +
-                              (rewrite fill_compose_hole));
-                      reflexivity);
-              rewrite H'; clear H';
-              rewrite H; clear H
-              ]
-        end
-      end.
-      {
-        eexists.
-        split.
-        - repeat econstructor;
-            match goal with
-            | |- _ <> _ => admit
-            end.
-        - cbn [app].
-          intros.
-          eauto.
-          (* todo deduplicate *)
-      }
-      subst i.
-      cbn [fill_hole compose_hole choice_ctx];
-        repeat ((rewrite fill_hole_section_section) +
-                (rewrite fill_compose_hole)).
+    Lemma NoDup_nth_error_Some_neq {T} l
+          (Hl : NoDup l)
+          i j
+          (x y : T)
+          (Hix : nth_error l i = Some x)
+          (Hjy : nth_error l j = Some y)
+          (Hij : i <> j)
+      : x <> y.
+      pose proof proj1 (NoDup_nth_error l) Hl i j ltac:(eapply nth_error_Some; congruence) as H.
+      assert (nth_error l i <> nth_error l j) by (intuition congruence).
+      congruence.
+    Qed.
 
-      (* victory! we now have decrypt(encrypt) instead of decrypt(!encrypt) *)
-      (* todo wip *)
-    Abort.
+    Ltac indexof x l :=
+      lazymatch l with
+      | nil => fail "element does not appear in the list"
+      | cons x _ => constr:(O)
+      | cons _ ?tl =>
+        let i := indexof x tl in
+        constr:(S i)
+      end.
+
+    Ltac solve_neq_from_NoDup :=
+      match goal with
+      | H : NoDup ?l |- ?x <> ?y
+        => 
+        let i := indexof x l in
+        let j := indexof y l in
+        refine (NoDup_nth_error_Some_neq l H i j x y _ _ _);
+        [ cbv [nth_error]; reflexivity ..
+        | refine (proj1 (Nat.eqb_neq _ _) _); reflexivity ]
+      end.
+
+    Hint Extern 0 (_ <> _) => solve_neq_from_NoDup : auth_safe'.
+    Hint Constructors auth_safe' : auth_safe'.
+
+    Ltac solve_eqwhp_fill_hole_r :=
+      lazymatch goal with
+      | |- eqwhp ?LHS (fill_hole ?e ?x) =>
+        is_evar e;
+        let C := build_context x LHS in
+        unify e C; reflexivity
+      end.
+
+    Ltac solve_auth_safe :=
+      lazymatch goal with
+      | |- auth_safe _ _ _
+        =>
+        (* todo deduplicate? *)
+        cbv [auth_safe];
+        eexists;
+        split;
+        [ typeclasses eauto with auth_safe'
+        | cbv [app];
+          typeclasses eauto with nocore ]
+      end.
+
+    Derive
+      auth_goal_after_mac_rewrite
+    SuchThat
+      (eqwhp auth_goal_after_mac_rewrite (auth_goal Actual))
+    As
+      auth_goal_mac_rewrite.
+    Proof.
+      cbv beta iota delta -[eqwhp].
+      rewrite (rewrite_verify mac_correct)
+        by (solve_eqwhp_fill_hole_r || solve_auth_safe);
+        cbv [fill_hole refine_hole without_holes choice_ctx].
+
+      match goal with
+      | |- context[decrypt@(_, ?D)] =>
+        match D with
+        | encrypt@(_) => fail 1
+        | _ => pose D; idtac "BAD DECRYPTION OF" D
+        end
+      end || idtac "victory: no unauthenticated decryptions".
+
+      reflexivity.
+    Qed.
 
     Lemma elimdec_verify :
       whp (check_out Actual -> verify_out Actual == verify_out ElimDec).

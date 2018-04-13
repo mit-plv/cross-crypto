@@ -1,4 +1,4 @@
-Require CrossCrypto.fmap.
+Require CrossCrypto.fmap.list_of_pairs.
 
 (* TODO: moveme *)
 Fixpoint Fixn {A B} (n:nat) (f : (A -> option B) -> A -> option B) {struct n}
@@ -13,6 +13,13 @@ Fixpoint Fixn_silent {A B} (inhabited_B:B) (n:nat) (f : (A -> B) -> A -> B) {str
   | O => f (fun _ => inhabited_B)
   | S n => f (Fixn_silent inhabited_B n f)
   end.
+
+Lemma Fixn_partial_correctness {A B} n (f : _ -> A -> option B)
+      (P : A -> B -> Prop)
+      (ok := fun F => forall a b, F a = Some b -> P a b)
+      (Hstep : forall F, ok F -> ok (f F))
+  : ok (Fixn n f).
+Proof. induction n; cbn; refine (Hstep _ _); [congruence|assumption]. Qed.
 
 Module monad.
   Record monad :=
@@ -48,7 +55,7 @@ Module let_in_monad.
   Definition let_in_monad : monad :=
     {|
       monad.m := fun A => A;
-      monad.ret := id;
+      monad.ret := fun _ x => x;
       monad.bind := fun A B (a : A) (f : A -> B) => let x := a in f x
     |}.
 
@@ -379,6 +386,30 @@ Module simply_typed.
             end
           end).
     End unification.
+
+    Import CrossCrypto.fmap.list_of_pairs.
+
+    Module _test.
+      Local Definition sillytest :
+        unify_operation
+          (list_of_pairs Nat.eqb)
+          (monad_operations := option_monad)
+          (fix eqb_const (t:type.type) {struct t} : _ -> _ -> bool :=
+             match t with
+             | type.nat => Nat.eqb
+             | type.m t =>
+               fun a b =>
+                 match a, b with
+                 | None, None => true
+                 | Some a, Some b => eqb_const t a b
+                 | _, _ => false
+                 end
+             end)
+          ((type.nat, const type.nat 1)::(type.nat, const type.nat 1)::nil)
+          ((type.nat, const type.nat 2)::(type.nat, const type.nat 1)::(type.nat, const type.nat 0)::nil)
+          ((type.nat, id 0), (type.nat, id 1), (list_of_pairs _).(fmap.empty), (list_of_pairs _).(fmap.empty))
+          = Some ((0, 1) :: nil, nil) := eq_refl.
+    End _test.
   End unification.
 End simply_typed.
 

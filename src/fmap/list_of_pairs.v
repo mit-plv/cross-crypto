@@ -1,3 +1,4 @@
+Local Set Universe Polymorphism.
 Require CrossCrypto.fmap.
 Require Import Coq.Lists.List.
 

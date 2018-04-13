@@ -2760,6 +2760,11 @@ Section Language.
         by (solve_eqwhp_fill_hole_r || solve_auth_safe);
         cbv [fill_hole refine_hole without_holes choice_ctx].
 
+      (* decrypt . encrypt -> id *)
+      (* encryption rule with skn1 *)
+      (* auth rule with signatures *)
+      (* probably unpack_whp and done *)
+
       match goal with
       | |- context[decrypt@(_, ?D)] =>
         match D with

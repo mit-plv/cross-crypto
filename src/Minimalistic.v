@@ -2374,11 +2374,11 @@ Section Language.
     Context (conf : confidentiality_conclusion).
 
     Lemma fill_confidentiality sk nonce msg1 msg2 {t}
-          (eh : @expr_with_hole tmessage t) e1 e2 :
+          (eh : @expr_with_hole tmessage t) e1 :
       encrypt_safe sk e1 ->
       no_nonce_reuse sk e1 ->
       e1 = fill_hole eh (encrypt@(keygen@($sk), nonce, msg1)) ->
-      e2 = fill_hole eh (encrypt@(keygen@($sk), nonce, msg2)) ->
+      let e2 := fill_hole eh (encrypt@(keygen@($sk), nonce, msg2)) in
       whp (eq_len@(msg1, msg2)) ->
       encrypt_safe sk e2 ->
       no_nonce_reuse sk e2 ->
@@ -2499,7 +2499,9 @@ Section Language.
     Context {skey2message : (tskey -> tmessage)%etype}
             {message2skey : (tmessage -> tskey)%etype}
             (message2skey_skey2message : forall k,
-                eqwhp (message2skey@(skey2message@k)) k).
+                eqwhp (message2skey@(skey2message@k)) k)
+            (eq_len_skey2message_skeygen : forall i j,
+               whp (eq_len@(skey2message@(skeygen@($i)), skey2message@(skeygen@($j))))).
 
     (* hardcoded nonce *)
     Context {N : forall eta, interp_type tnonce eta}.
@@ -2514,8 +2516,8 @@ Section Language.
     Arguments ffst {_ _}.
     Arguments fsnd {_ _}.
 
-    Context (skn1 skn2 Kn : positive)
-            (nodup : NoDup (skn1 :: skn2 :: Kn :: nil)%list).
+    Context (skn1 skn2 Kn irrelevant : positive)
+            (nodup : NoDup (skn1 :: skn2 :: Kn :: irrelevant :: nil)%list).
 
     Example auth_from_conf :
       whp (
@@ -2564,20 +2566,24 @@ Section Language.
       rewrite message2skey_skey2message.
       clear dependent message2skey.
 
-      (* for display, probably not for proof:
-      match goal with |- context [(eif ?b then ?x else ?y)%expr]
-                      => generalize b; let b := fresh "b" in intros b end. *)
-
       (* encryption rule with skn1 *)
+      let sk := constr:(skn1) in
+      let msg2 := constr:(skey2message@(skeygen@($ irrelevant))) in
       lazymatch goal with
       | |- context[(encrypt@(ekeygen@($ ?sk), ?nonce, ?msg1))%expr] =>
-        rewrite (fill_confidentiality confidentiality skn1 nonce msg1);
-          cycle 1
+        rewrite (fill_confidentiality confidentiality sk nonce msg1 msg2) by
+            (solve_eq_fill_hole_r ||
+             solve_encrypt_safe ||
+             lazymatch goal with |- no_nonce_reuse _ _ => admit (* formulation WIP *) end ||
+             exact (eq_len_skey2message_skeygen _ _));
+          cbv [fill_hole]
       end.
-      - solve_encrypt_safe.
-      - admit. (* wip *)
-      - solve_eq_fill_hole_r.
-      - cbn [fill_hole]; reflexivity.
+
+      (* for display, probably not for proof:
+      match goal with |- context [(eif ?b then ?x else ?y)%expr]
+                      => generalize b; let b := fresh "b" in intros b end.
+      generalize (skey2message@(skeygen@($ irrelevant))); intro _k.
+       *)
 
       (* auth rule with signatures *)
       (* probably unpack_whp and done *)

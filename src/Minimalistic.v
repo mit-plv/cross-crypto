@@ -2560,17 +2560,72 @@ Section Language.
     Qed.
   End Encrypt.
 
+  Lemma NoDup_nth_error_Some_neq {T} l
+        (Hl : NoDup l)
+        i j
+        (x y : T)
+        (Hix : nth_error l i = Some x)
+        (Hjy : nth_error l j = Some y)
+        (Hij : i <> j)
+    : x <> y.
+    pose proof proj1 (NoDup_nth_error l) Hl i j ltac:(eapply nth_error_Some; congruence) as H.
+    assert (nth_error l i <> nth_error l j) by (intuition congruence).
+    congruence.
+  Qed.
+
+  Ltac indexof x l :=
+    lazymatch l with
+    | nil => fail "element does not appear in the list"
+    | cons x _ => constr:(O)
+    | cons _ ?tl =>
+      let i := indexof x tl in
+      constr:(S i)
+    end.
+
+  Ltac solve_neq_from_NoDup :=
+    match goal with
+    | H : NoDup ?l |- ?x <> ?y
+      => 
+      let i := indexof x l in
+      let j := indexof y l in
+      refine (NoDup_nth_error_Some_neq l H i j x y _ _ _);
+      [ cbv [nth_error]; reflexivity ..
+      | refine (proj1 (Nat.eqb_neq _ _) _); reflexivity ]
+    end.
+
+  Hint Extern 0 (_ <> _) => solve_neq_from_NoDup : auth_safe'.
+  Hint Constructors auth_safe' : auth_safe'.
+
+  Ltac solve_eqwhp_fill_hole_r :=
+    lazymatch goal with
+    | |- eqwhp ?LHS (fill_hole ?e ?x) =>
+      is_evar e;
+      let C := build_context x LHS in
+      unify e C; reflexivity
+    end.
+
+  Ltac solve_auth_safe :=
+    lazymatch goal with
+    | |- auth_safe _ _ _
+      =>
+      (* todo deduplicate? *)
+      cbv [auth_safe];
+      eexists;
+      split;
+      [ typeclasses eauto with auth_safe'
+      | cbv [app];
+        typeclasses eauto with nocore ]
+    end.
+
   Section ExampleProtocol1.
-    Context {tmessage : type}
+    Context {tmessage tsignature tskey tpkey : type}
             {eq_len : (tmessage * tmessage -> tbool)%etype}.
-    Context {tsignature tskey tpkey : type}.
 
     Context {skeygen : (trand -> tskey)%etype} (* secret key generation  *)
             {pkeygen : (tskey -> tpkey)%etype} (* public part of key *)
             {sign : (tskey * tmessage -> tsignature)%etype}
-            {sverify : (tpkey * tmessage * tsignature -> tbool)%etype}.
-
-    Context {signature_correct :
+            {sverify : (tpkey * tmessage * tsignature -> tbool)%etype}
+            {signature_correct :
                @auth_conclusion
                  tmessage
                  tsignature tskey tpkey skeygen pkeygen sign sverify}.
@@ -2579,24 +2634,27 @@ Section Language.
             {mkeygen : (trand -> tmkey)%etype}
             {idmkey : (tmkey -> tmkey)%etype}
             {mac : (tmkey * tmessage -> tmac)%etype}
-            {mverify : (tmkey * tmessage * tmac -> tbool)%etype}.
-
-    Context {mac_correct :
+            {mverify : (tmkey * tmessage * tmac -> tbool)%etype}
+            {mac_correct :
                @auth_conclusion tmessage tmac tmkey tmkey
                                 mkeygen idmkey mac mverify}.
+
     Context {tkey tnonce : type}
             {ekeygen : (trand -> tkey)%etype}
             {encrypt : (tkey * tnonce * tmessage -> tmessage)%etype}
-            {decrypt : (tkey * tnonce * tmessage -> tmessage)%etype}.
-
-    Context {confidentiality :
+            {decrypt : (tkey * tnonce * tmessage -> tmessage)%etype}
+            (decrypt_encrypt : forall k n m,
+                eqwhp (decrypt@(ekeygen@($k), n, encrypt@(ekeygen@($k), n, m))) m)
+            {confidentiality :
                @confidentiality_conclusion tmessage eq_len
                                            tkey tnonce ekeygen encrypt}.
 
     Context {skey2message : (tskey -> tmessage)%etype}
-            {message2skey : (tmessage -> tskey)%etype}.
+            {message2skey : (tmessage -> tskey)%etype}
+            (message2skey_skey2message : forall k,
+                eqwhp (message2skey@(skey2message@k)) k).
 
-    (* constant nonce *)
+    (* hardcoded nonce *)
     Context {N : forall eta, interp_type tnonce eta}.
     Context  {tlist : type -> type}
              {cnil : forall t eta, interp_type (tlist t) eta}
@@ -2609,158 +2667,42 @@ Section Language.
     Arguments ffst {_ _}.
     Arguments fsnd {_ _}.
 
-    Local Open Scope list_scope.
     Context (skn1 skn2 Kn : positive)
-            (nodup : NoDup (skn1 :: skn2 :: Kn :: nil)).
+            (nodup : NoDup (skn1 :: skn2 :: Kn :: nil)%list).
 
-    Section Protocol1Rewrite.
-      (* FIXME lots of definitions here get leaked.  It's nice to be
-         able to talk about them outside this section for proving things
-         about them, so the best thing to do here may be to move the
-         whole thing inside its own module later. *)
+    Example auth_from_conf :
+      whp (
+          let sk1 := ekeygen@($skn1) in
+          let sk2 := mkeygen@($skn2) in
+          let sK := skeygen@($Kn) in
+          let msK := skey2message@sK in
+          let enc_out := encrypt@(sk1, #N, msK) in
+          let mac_out := mac@(sk2, enc_out) in
+          let net_in_1 := (enc_out, mac_out)%expr in
 
-      Inductive protocol1_rewrite_state :=
-      | Actual
-      | ElimDec
-      | RewriteEnc.
+          let adv_out_1 := !(tmessage * tmac * tmessage)@net_in_1 in
+          let adv_out_enc := ffst@(ffst@adv_out_1) in
+          let adv_out_mac := fsnd@(ffst@adv_out_1) in
+          let adv_out_msg := fsnd@adv_out_1 in
+          let check_out := mverify@(idmkey@sk2, adv_out_enc, adv_out_mac) in
+          let dec_out := decrypt@(sk1, #N, adv_out_enc) in
+          let dec_msg := dec_out in
+          let sK' := message2skey@dec_msg in
+          let sign_out := sign@(sK', adv_out_msg) in
+          let net_in_good := (sign_out, (adv_out_msg, net_in_1))%expr in
+          let net_in_2 := (eif check_out
+                           then net_in_good
+                           else (#!, (#!, net_in_1)))%expr in
 
-      Variable (s : protocol1_rewrite_state).
-
-      Definition sk1 := ekeygen@($skn1).
-      Definition sk2 := mkeygen@($skn2).
-      Definition sK := skeygen@($Kn).
-      Definition msK := skey2message@sK.
-      Definition enc_out :=
-        encrypt@(sk1, #N, match s with
-                          | RewriteEnc => #!
-                          | _ => msK
-                          end).
-      Definition mac_out := mac@(sk2, enc_out).
-      Definition net_in_1 := (enc_out, mac_out)%expr.
-      Definition adv_out_1 := !(tmessage * tmac * tmessage)@net_in_1.
-
-      Definition adv_out_enc := ffst@(ffst@adv_out_1).
-      Definition adv_out_mac := fsnd@(ffst@adv_out_1).
-      Definition adv_out_msg := fsnd@adv_out_1.
-      Definition check_out := mverify@(idmkey@sk2, adv_out_enc, adv_out_mac).
-      Definition dec_out :=
-        match s with
-        | Actual => decrypt@(sk1, #N, adv_out_enc)
-        | _ => msK
-        end%expr.
-      Definition dec_msg := dec_out.
-      Definition sK' := message2skey@dec_msg.
-      Definition sign_out := sign@(sK', adv_out_msg).
-
-      Definition net_in_good := (sign_out, (adv_out_msg, net_in_1))%expr.
-      Definition net_in_2 := (eif check_out
-                              then net_in_good
-                              else (#!, (#!, net_in_1)))%expr.
-
-      Definition adv_out_2 := !(tmessage * tsignature)@net_in_2.
-      Definition adv_out_2_msg := ffst@adv_out_2.
-      Definition adv_out_2_sig := fsnd@adv_out_2.
-      Definition pK := pkeygen@sK.
-      Definition verify_out := sverify@(pK, adv_out_2_msg, adv_out_2_sig).
-
-      Definition auth_goal := (verify_out -> adv_out_2_msg == adv_out_msg)%expr.
-    End Protocol1Rewrite.
-
-    Example mac_integrity : whp (check_out Actual ->
-                               adv_out_enc Actual == enc_out Actual).
+          let adv_out_2 := !(tmessage * tsignature)@net_in_2 in
+          let adv_out_2_msg := ffst@adv_out_2 in
+          let adv_out_2_sig := fsnd@adv_out_2 in
+          let pK := pkeygen@sK in
+          let verify_out := sverify@(pK, adv_out_2_msg, adv_out_2_sig) in
+          verify_out -> adv_out_2_msg == adv_out_msg).
     Proof.
-      rewrite <-(expr_in_singleton (adv_out_enc Actual) (enc_out Actual)).
-      cbv [check_out].
-      eapply mac_correct.
-      eexists.
-      split.
-      - cbv.
-        repeat
-          match goal with
-          | |- auth_safe' _ _ _ => econstructor
-          | [ |- _ <> _ ] =>
-            intro;
-              repeat (subst;
-                      match goal with
-                      | [ H : NoDup _ |- _ ] =>
-                        inversion_clear H
-                      end;
-                      cbv [In] in *;
-                      eauto)
-          end.
-      - eauto.
-    Qed.
+      cbv zeta.
 
-    Lemma NoDup_nth_error_Some_neq {T} l
-          (Hl : NoDup l)
-          i j
-          (x y : T)
-          (Hix : nth_error l i = Some x)
-          (Hjy : nth_error l j = Some y)
-          (Hij : i <> j)
-      : x <> y.
-      pose proof proj1 (NoDup_nth_error l) Hl i j ltac:(eapply nth_error_Some; congruence) as H.
-      assert (nth_error l i <> nth_error l j) by (intuition congruence).
-      congruence.
-    Qed.
-
-    Ltac indexof x l :=
-      lazymatch l with
-      | nil => fail "element does not appear in the list"
-      | cons x _ => constr:(O)
-      | cons _ ?tl =>
-        let i := indexof x tl in
-        constr:(S i)
-      end.
-
-    Ltac solve_neq_from_NoDup :=
-      match goal with
-      | H : NoDup ?l |- ?x <> ?y
-        => 
-        let i := indexof x l in
-        let j := indexof y l in
-        refine (NoDup_nth_error_Some_neq l H i j x y _ _ _);
-        [ cbv [nth_error]; reflexivity ..
-        | refine (proj1 (Nat.eqb_neq _ _) _); reflexivity ]
-      end.
-
-    Hint Extern 0 (_ <> _) => solve_neq_from_NoDup : auth_safe'.
-    Hint Constructors auth_safe' : auth_safe'.
-
-    Ltac solve_eqwhp_fill_hole_r :=
-      lazymatch goal with
-      | |- eqwhp ?LHS (fill_hole ?e ?x) =>
-        is_evar e;
-        let C := build_context x LHS in
-        unify e C; reflexivity
-      end.
-
-    Ltac solve_auth_safe :=
-      lazymatch goal with
-      | |- auth_safe _ _ _
-        =>
-        (* todo deduplicate? *)
-        cbv [auth_safe];
-        eexists;
-        split;
-        [ typeclasses eauto with auth_safe'
-        | cbv [app];
-          typeclasses eauto with nocore ]
-      end.
-    
-    Context (decrypt_encrypt : forall k n m,
-                eqwhp (decrypt@(ekeygen@($k), n, encrypt@(ekeygen@($k), n, m))) m).
-    Context (message2skey_skey2message : forall k,
-                eqwhp (message2skey@(skey2message@k)) k).
-
-    Derive
-      auth_goal_after_mac_rewrite
-    SuchThat
-      (eqwhp auth_goal_after_mac_rewrite (auth_goal Actual))
-    As
-      auth_goal_mac_rewrite.
-    Proof.
-      cbv beta iota delta -[eqwhp].
       rewrite (rewrite_verify mac_correct)
         by (solve_eqwhp_fill_hole_r || solve_auth_safe);
         cbv [fill_hole refine_hole without_holes choice_ctx].
@@ -2775,49 +2717,12 @@ Section Language.
       rewrite message2skey_skey2message.
       clear dependent message2skey.
 
-      (* for display, unsure whether for proof 
       match goal with |- context [(eif ?b then ?x else ?y)%expr]
                       => generalize b; let b := fresh "b" in intros b end. *)
       
       (* encryption rule with skn1 *)
       (* auth rule with signatures *)
       (* probably unpack_whp and done *)
-
-      reflexivity.
-    Qed.
-
-    Lemma elimdec_verify :
-      whp (check_out Actual -> verify_out Actual == verify_out ElimDec).
-    Admitted.
-    Lemma elimdec_adv_msg :
-      whp (check_out Actual -> adv_out_msg Actual == adv_out_msg ElimDec).
-    Admitted.
-    Lemma elimdec_adv_msg_2 :
-      whp (check_out Actual -> adv_out_2_msg Actual == adv_out_2_msg ElimDec).
-    Admitted.
-
-    Lemma rewrite_enc :
-      auth_goal ElimDec ≈ auth_goal RewriteEnc.
-      etransitivity.
-      cbv beta iota delta -[indist].
-
-      (* TODO change definitions to let-ins *)
-      (* TODO implement build enc_holes *)
-
-    Admitted.
-
-    (* Goal Proper (whp ==> whp) indist. *)
-
-    Lemma authenticity_after_rewrite :
-      whp (auth_goal RewriteEnc).
-      cbv beta iota delta -[whp].
-    Admitted.
-
-    Lemma verify_impl_check : whp (verify_out Actual -> check_out Actual).
-    Admitted.
-
-    Theorem example_proto_1_authenticity :
-      whp (verify_out Actual -> adv_out_2_msg Actual == adv_out_msg Actual).
-    Admitted.
+    Abort.
   End ExampleProtocol1.
 End Language.

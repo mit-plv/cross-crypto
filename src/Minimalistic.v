@@ -1931,6 +1931,7 @@ Section Language.
         ewh_pair (without_holes e1) (without_holes e2)
       end.
 
+    (* TODO we actually have syntactic equality here *)
     Lemma fill_without_holes {hole} {t} (x : expr hole) (e : expr t) :
       fill_hole (without_holes e) x = e.
     Proof.
@@ -2004,6 +2005,7 @@ Section Language.
       | ewh_pair a b => ewh_pair (refine_hole A a) (refine_hole A b)
       end.
 
+    (* TODO we actually have syntactic equality here *)
     Lemma fill_refine_hole {t1 t2 t3}
           (A : @expr_with_hole t1 t2) (B : @expr_with_hole t2 t3)
           (e : expr t1) :
@@ -2357,206 +2359,31 @@ Section Language.
         no_nonce_reuse sk e ->
         no_nonce_reuse sk e' ->
         eq_mod_enc sk e e' ->
-        indist e e'.
+        e ≈ e'.
 
-    (* Syntactic structure of compliant terms *)
-    Inductive enc_holes (sk : positive) {hole : Type} : type -> Type :=
-    | ench_const {t} (_:forall eta, interp_type t eta) : enc_holes sk t
-    | ench_random (idx:positive) : idx <> sk -> enc_holes sk trand
-    | ench_adversarial t1 t2 (_:enc_holes sk t1) : enc_holes sk t2
-    | ench_func {t1 t2} (_:func t1 t2) (_:enc_holes sk t1) :
-        enc_holes sk t2
-    | ench_pair {t1 t2} (_:enc_holes sk t1) (_:enc_holes sk t2) :
-        enc_holes sk (t1 * t2)
-    | ench_encrypt (_:hole) : enc_holes sk tmessage.
-
-    Fixpoint fill_enc_holes {sk : positive} {hole : Type}
-             (nonce : hole -> expr tnonce)
-             (message : hole -> expr tmessage)
-             {t} (eh : @enc_holes sk hole t) : expr t :=
-      match eh with
-      | ench_const _ x => #x
-      | ench_random _ idx _ => $idx
-      | ench_adversarial _ t1 t2 eh' => !t2@(fill_enc_holes nonce message eh')
-      | ench_func _ f      eh' => f@(fill_enc_holes nonce message eh')
-      | ench_pair _ eh1 eh2 => (fill_enc_holes nonce message eh1, fill_enc_holes nonce message eh2)
-      | ench_encrypt _ h => encrypt@(keygen@($sk), nonce h, message h)
-      end.
-
-    Lemma fill_safe :
-      forall sk {hole} nonce message {t} (eh : @enc_holes sk hole t),
-        (forall h, encrypt_safe sk (nonce h)) ->
-        (forall h, encrypt_safe sk (message h)) ->
-        encrypt_safe sk (fill_enc_holes nonce message eh).
+    Lemma fill_eq_mod_enc sk nonce msg1 msg2 {t}
+          (eh : @expr_with_hole tmessage t) :
+      whp (eq_len@(msg1, msg2)) ->
+      eq_mod_enc sk
+                 (fill_hole eh (encrypt@(keygen@($sk), nonce, msg1)))
+                 (fill_hole eh (encrypt@(keygen@($sk), nonce, msg2))).
     Proof.
-      induction eh;
-        cbn [fill_enc_holes];
-        econstructor; eauto.
+      intros; induction eh; cbn [fill_hole]; econstructor; eauto.
     Qed.
 
-    Lemma fill_enc_holes_ind {sk hole}
-          nonce message
-          (P : forall {t}, expr t -> Prop) :
-      (forall h, encrypt_safe sk (nonce h)) ->
-      (forall h, encrypt_safe sk (message h)) ->
-      (forall {t} x, @P t (#x)%expr) -> (* WHY do we need a scope annotation here *)
-      (forall idx, idx <> sk -> P ($idx)%expr) -> (* and here? *)
-      (forall t1 t2 (e' : expr t1), P e' ->  P (!t2@e')) ->
-      (forall t1 t2 (f : func t1 t2) e', encrypt_safe sk e' -> P e' -> P (f@e')) ->
-      (forall t1 e1 t2 e2, @P t1 e1 -> @P t2 e2 -> P (e1, e2)%expr) -> (* and here? *)
-      (forall h, P (encrypt@(keygen@($sk), nonce h, message h))) ->
-      forall {t} (eh : @enc_holes sk hole t),
-        P (fill_enc_holes nonce message eh).
-    Proof.
-      induction eh; eauto using fill_safe.
-    Qed.
+    Context (conf : confidentiality_conclusion).
 
-    Ltac expr_head x :=
-      match x with
-      | expr_const _ => idtac
-      | expr_random _ => idtac
-      | expr_adversarial _ => idtac
-      | expr_app _ _ => idtac
-      | expr_pair _ _ => idtac
-      | _ => fail
-      end.
-
-    Lemma encrypts_fill :
-      forall sk {hole} nonce message {t} (eh : @enc_holes sk hole t) n m,
-        (forall h, encrypt_safe sk (nonce h)) ->
-        (forall h, encrypt_safe sk (message h)) ->
-        (forall h, encrypts sk n m (nonce h) ->
-                   exists h', n = nonce h' /\ m = message h') ->
-        (forall h, encrypts sk n m (message h) ->
-                   exists h', n = nonce h' /\ m = message h') ->
-        encrypts sk n m (fill_enc_holes nonce message eh) ->
-        exists h, n = nonce h /\ m = message h.
-    Proof.
-      intros ? ? ? ? t eh ? ? ? ? ? ? E.
-      revert t eh E.
-      refine (@fill_enc_holes_ind
-                _ _
-                nonce message (fun _ e =>
-                                 encrypts sk n m e ->
-                                 exists h, _)
-                _ _ _ _ _ _ _ _); eauto;
-        intros;
-        repeat match goal with
-               | [ H : @existT type _ ?x ?y = @existT type _ ?x ?y' |- _ ] =>
-                 assert (y = y') by
-                     (eapply inj_pair2_eq_dec;
-                      eauto using EqDec_dec, eqdec_type);
-                   (subst y || subst y');
-                   clear H
-               | [ H : encrypts _ _ _ ?e |- _ ] =>
-                 expr_head e;
-                   inversion H; clear H
-               | [ H : encrypt_safe _ ?e |- _ ] =>
-                 expr_head e;
-                   inversion H; clear H
-               | [ _ : _ = ?t |- _ ] => subst t
-               | [ _ : ?x <> ?x |- _ ] => congruence
-               | _ => eauto
-               end.
-    Qed.
-
-    Lemma fill_no_reuse :
-      forall sk {hole} nonce message {t} (eh : @enc_holes sk hole t),
-        (forall h, encrypt_safe sk (nonce h)) ->
-        (forall h, encrypt_safe sk (message h)) ->
-        (forall n m h, encrypts sk n m (nonce h) ->
-                   exists h', n = nonce h' /\ m = message h') ->
-        (forall n m h, encrypts sk n m (message h) ->
-                   exists h', n = nonce h' /\ m = message h') ->
-        (forall h1 h2, whp (nonce h1 == nonce h2 -> message h1 == message h2)) ->
-        no_nonce_reuse sk (fill_enc_holes nonce message eh).
-    Proof.
-      unfold no_nonce_reuse.
-      intros.
-      repeat match goal with
-             | [ H : encrypts _ ?n' ?m' _ |- _ ] =>
-               edestruct encrypts_fill with (n := n') (m := m')
-                 as [? []]; eauto; clear H
-             end.
-      subst; eauto.
-    Qed.
-
-    Lemma fill_mod_enc :
-      forall sk {hole} nonce msg1 msg2 {t} (eh : @enc_holes sk hole t),
-        (forall h, whp (eq_len@(msg1 h, msg2 h))) ->
-        eq_mod_enc sk
-                   (fill_enc_holes nonce msg1 eh)
-                   (fill_enc_holes nonce msg2 eh).
-    Proof.
-      induction eh; cbn [fill_enc_holes]; econstructor; eauto.
-    Qed.
-
-    Lemma fill_confidentiality sk {hole} nonce msg1 msg2 {t}
-          (eh : @enc_holes sk hole t) :
-      (forall h, encrypt_safe sk (nonce h)) ->
-      (forall h, encrypt_safe sk (msg1 h)) ->
-      (forall h, encrypt_safe sk (msg2 h)) ->
-      (forall n m h, encrypts sk n m (nonce h) ->
-                     exists h', n = nonce h' /\ m = msg1 h') ->
-      (forall n m h, encrypts sk n m (nonce h) ->
-                     exists h', n = nonce h' /\ m = msg2 h') ->
-      (forall n m h, encrypts sk n m (msg1 h) ->
-                     exists h', n = nonce h' /\ m = msg1 h') ->
-      (forall n m h, encrypts sk n m (msg2 h) ->
-                     exists h', n = nonce h' /\ m = msg2 h') ->
-      (forall h1 h2, whp (nonce h1 == nonce h2 -> msg1 h1 == msg1 h2)) ->
-      (forall h1 h2, whp (nonce h1 == nonce h2 -> msg2 h1 == msg2 h2)) ->
-      (forall h, whp (eq_len@(msg1 h, msg2 h))) ->
-      confidentiality_conclusion ->
-      indist (fill_enc_holes nonce msg1 eh)
-             (fill_enc_holes nonce msg2 eh).
-    Proof.
-      intros;
-        repeat match goal with
-               | [ H : confidentiality_conclusion |- indist _ _ ] =>
-                 eapply H
-               | [ |- encrypt_safe _ _ ] => eauto using fill_safe
-               | [ |- no_nonce_reuse _ _ ] => eauto using fill_no_reuse
-               | [ |- eq_mod_enc _ _ _ ] => eauto using fill_mod_enc
-               end.
-    Qed.
-
-    (* A nonce scheme that always picks constant nonces is safe from reuse:
-       In the formula
-           whp (nonce_i = nonce_j -> message_i = message_j)
-       the antecedent is false with high probability unless i = j
-       in which case the consequent is true with high probability. *)
-    Lemma constant_nonce_no_reuse {hole}
-          (n : hole -> expr tnonce)
-          (N : hole -> _) (m : hole -> expr tmessage) :
-      (forall h, n h = expr_const (N h)) ->
-      (forall h1 h2 : hole, h1 = h2 \/ h1 <> h2) ->
-      (forall (h1 h2 : hole) eta, N h1 eta = N h2 eta -> h1 = h2) ->
-      forall h1 h2, whp (n h1 == n h2 -> m h1 == m h2).
-    Proof.
-      intros C hole_dec NI h1 h2.
-      destruct (hole_dec h1 h2).
-      - subst h2.
-        unpack_whp.
-        repeat match goal with
-               | |- context [?a ?= ?b] => destruct (a ?= b) eqn:?
-               | H : _ = _ |- _ =>
-                 rewrite eqb_leibniz in H; rewrite H in *; clear H
-               | H : _ = _ |- _ => rewrite eqb_refl in H; discriminate H
-               | _ => reflexivity
-               end.
-      - unpack_whp.
-        repeat match goal with
-               | |- context [?a ?= ?b] =>
-                 destruct (a ?= b) eqn:?
-               | H : _ = _ |- _ => rewrite eqb_leibniz in H
-               | H : context[n _] |- _ => rewrite C in H; cbv in H
-               | H : N _ _ = N _ _ |- _ =>
-                 apply NI in H; rewrite H in *; clear H
-               | H: _ = _ |- _ => rewrite eqb_refl in H; discriminate H
-               | _ => reflexivity
-               end.
-    Qed.
+    Lemma fill_confidentiality sk nonce msg1 msg2 {t}
+          (eh : @expr_with_hole tmessage t) e1 e2 :
+      encrypt_safe sk e1 ->
+      no_nonce_reuse sk e1 ->
+      e1 = fill_hole eh (encrypt@(keygen@($sk), nonce, msg1)) ->
+      e2 = fill_hole eh (encrypt@(keygen@($sk), nonce, msg2)) ->
+      whp (eq_len@(msg1, msg2)) ->
+      encrypt_safe sk e2 ->
+      no_nonce_reuse sk e2 ->
+      e1 ≈ e2.
+    Proof. intros; subst e1 e2; eauto using fill_eq_mod_enc. Qed.
   End Encrypt.
 
   Lemma NoDup_nth_error_Some_neq {T} l
@@ -2584,7 +2411,7 @@ Section Language.
   Ltac solve_neq_from_NoDup :=
     match goal with
     | H : NoDup ?l |- ?x <> ?y
-      => 
+      =>
       let i := indexof x l in
       let j := indexof y l in
       refine (NoDup_nth_error_Some_neq l H i j x y _ _ _);
@@ -2592,17 +2419,9 @@ Section Language.
       | refine (proj1 (Nat.eqb_neq _ _) _); reflexivity ]
     end.
 
+  Create HintDb auth_safe' discriminated.
   Hint Extern 0 (_ <> _) => solve_neq_from_NoDup : auth_safe'.
   Hint Constructors auth_safe' : auth_safe'.
-
-  Ltac solve_eqwhp_fill_hole_r :=
-    lazymatch goal with
-    | |- eqwhp ?LHS (fill_hole ?e ?x) =>
-      is_evar e;
-      let C := build_context x LHS in
-      unify e C; reflexivity
-    end.
-
   Ltac solve_auth_safe :=
     lazymatch goal with
     | |- auth_safe _ _ _
@@ -2614,6 +2433,35 @@ Section Language.
       [ typeclasses eauto with auth_safe'
       | cbv [app];
         typeclasses eauto with nocore ]
+    end.
+
+  Create HintDb encrypt_safe discriminated.
+  Hint Extern 0 (_ <> _) => solve_neq_from_NoDup : encrypt_safe.
+  Hint Constructors encrypt_safe : encrypt_safe.
+  Ltac solve_encrypt_safe :=
+    lazymatch goal with
+    | |- encrypt_safe _ _ => typeclasses eauto with encrypt_safe
+    end.
+
+  Ltac solve_eq_fill_hole_r :=
+    try lazymatch goal with
+        | |- eqwhp _ _ => apply (eq_subrelation Reflexive_eqwhp)
+        end;
+    lazymatch goal with
+    | |- ?LHS = (fill_hole ?e ?x) =>
+      is_evar e;
+      let C := build_context x LHS in
+      unify e C; reflexivity
+    end.
+
+  Ltac expr_head x :=
+    match x with
+    | expr_const _ => idtac
+    | expr_random _ => idtac
+    | expr_adversarial _ => idtac
+    | expr_app _ _ => idtac
+    | expr_pair _ _ => idtac
+    | _ => fail
     end.
 
   Section ExampleProtocol1.
@@ -2703,7 +2551,7 @@ Section Language.
       cbv zeta.
 
       rewrite (rewrite_verify mac_correct)
-        by (solve_eqwhp_fill_hole_r || solve_auth_safe);
+        by (solve_eq_fill_hole_r || solve_auth_safe);
         cbv [fill_hole refine_hole without_holes choice_ctx].
 
       rewrite decrypt_encrypt.
@@ -2719,8 +2567,18 @@ Section Language.
       (* for display, probably not for proof:
       match goal with |- context [(eif ?b then ?x else ?y)%expr]
                       => generalize b; let b := fresh "b" in intros b end. *)
-      
+
       (* encryption rule with skn1 *)
+      lazymatch goal with
+      | |- context[(encrypt@(ekeygen@($ ?sk), ?nonce, ?msg1))%expr] =>
+        rewrite (fill_confidentiality confidentiality skn1 nonce msg1);
+          cycle 1
+      end.
+      - solve_encrypt_safe.
+      - admit. (* wip *)
+      - solve_eq_fill_hole_r.
+      - cbn [fill_hole]; reflexivity.
+
       (* auth rule with signatures *)
       (* probably unpack_whp and done *)
     Abort.

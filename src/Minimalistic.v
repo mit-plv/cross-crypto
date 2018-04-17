@@ -4,7 +4,6 @@ Require Import Coq.MSets.MSetPositive Coq.FSets.FMapPositive.
 Require Import FCF.FCF FCF.Asymptotic FCF.EqDec.
 Require Import CrossCrypto.Util CrossCrypto.RatUtil CrossCrypto.RewriteUtil CrossCrypto.MapUtil.
 Require Import Lia. (* TODO: remove after removing not_negligible_const *)
-Require Import Coq.derive.Derive.
 
 Require Import Coq.btauto.Btauto.
 Lemma eqb_bool a b : (a ?= b) = negb (xorb a b). Admitted.
@@ -2717,6 +2716,7 @@ Section Language.
       rewrite message2skey_skey2message.
       clear dependent message2skey.
 
+      (* for display, probably not for proof:
       match goal with |- context [(eif ?b then ?x else ?y)%expr]
                       => generalize b; let b := fresh "b" in intros b end. *)
       

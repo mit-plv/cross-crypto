@@ -2587,7 +2587,7 @@ Section Language.
     Context {tkey tnonce : type}
             {ekeygen : (trand -> tkey)%etype}
             {encrypt : (tkey * tnonce * tmessage -> tmessage)%etype}
-            {decrypt : (tkey * tmessage -> tmessage)%etype}.
+            {decrypt : (tkey * tnonce * tmessage -> tmessage)%etype}.
 
     Context {confidentiality :
                @confidentiality_conclusion tmessage eq_len
@@ -2645,7 +2645,7 @@ Section Language.
       Definition check_out := mverify@(idmkey@sk2, adv_out_enc, adv_out_mac).
       Definition dec_out :=
         match s with
-        | Actual => decrypt@(sk1, adv_out_enc)
+        | Actual => decrypt@(sk1, #N, adv_out_enc)
         | _ => msK
         end%expr.
       Definition dec_msg := dec_out.
@@ -2747,6 +2747,11 @@ Section Language.
         | cbv [app];
           typeclasses eauto with nocore ]
       end.
+    
+    Context (decrypt_encrypt : forall k n m,
+                eqwhp (decrypt@(ekeygen@($k), n, encrypt@(ekeygen@($k), n, m))) m).
+    Context (message2skey_skey2message : forall k,
+                eqwhp (message2skey@(skey2message@k)) k).
 
     Derive
       auth_goal_after_mac_rewrite
@@ -2760,18 +2765,23 @@ Section Language.
         by (solve_eqwhp_fill_hole_r || solve_auth_safe);
         cbv [fill_hole refine_hole without_holes choice_ctx].
 
-      (* decrypt . encrypt -> id *)
+      rewrite decrypt_encrypt.
+      clear dependent decrypt ||
+            lazymatch goal with
+            | |- context[decrypt@(_, ?D)] =>
+              fail "BAD DECRYPTION OF" D
+            end.
+
+      rewrite message2skey_skey2message.
+      clear dependent message2skey.
+
+      (* for display, unsure whether for proof 
+      match goal with |- context [(eif ?b then ?x else ?y)%expr]
+                      => generalize b; let b := fresh "b" in intros b end. *)
+      
       (* encryption rule with skn1 *)
       (* auth rule with signatures *)
       (* probably unpack_whp and done *)
-
-      match goal with
-      | |- context[decrypt@(_, ?D)] =>
-        match D with
-        | encrypt@(_) => fail 1
-        | _ => pose D; idtac "BAD DECRYPTION OF" D
-        end
-      end || idtac "victory: no unauthenticated decryptions".
 
       reflexivity.
     Qed.

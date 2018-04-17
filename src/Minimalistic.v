@@ -2259,7 +2259,7 @@ Section Language.
     Let auth_safe := @auth_safe tmessage ttag tskey tvkey
                                 skeygen vkeygen auth verify.
     Lemma rewrite_verify
-          {sk tag m}
+          sk {tag m}
           {t e} {C : expr_with_hole t} (Hhandler : eqwhp e (fill_hole C m))
           {choice0 choices} (Hchoices : auth_safe sk _ tag (cons choice0 choices ))
           {err : expr t}
@@ -2552,7 +2552,8 @@ Section Language.
     Proof.
       cbv zeta.
 
-      rewrite (rewrite_verify mac_correct)
+      (* auth rule with mac on skn2 *)
+      rewrite (rewrite_verify mac_correct skn2)
         by (solve_eq_fill_hole_r || solve_auth_safe);
         cbv [fill_hole refine_hole without_holes choice_ctx].
 
@@ -2562,7 +2563,6 @@ Section Language.
             | |- context[decrypt@(_, ?D)] =>
               fail "BAD DECRYPTION OF" D
             end.
-
       rewrite message2skey_skey2message.
       clear dependent message2skey.
 
@@ -2570,7 +2570,7 @@ Section Language.
       let sk := constr:(skn1) in
       let msg2 := constr:(skey2message@(skeygen@($ irrelevant))) in
       lazymatch goal with
-      | |- context[(encrypt@(ekeygen@($ ?sk), ?nonce, ?msg1))%expr] =>
+      | |- context[(encrypt@(ekeygen@($sk), ?nonce, ?msg1))%expr] =>
         rewrite (fill_confidentiality confidentiality sk nonce msg1 msg2) by
             (solve_eq_fill_hole_r ||
              solve_encrypt_safe ||
@@ -2579,14 +2579,22 @@ Section Language.
           cbv [fill_hole]
       end.
 
-      (* for display, probably not for proof:
+      (* auth rule with signatures on Kn *)
+      rewrite impl_if.
+      rewrite (rewrite_verify signature_correct Kn)
+        by (solve_eq_fill_hole_r || solve_auth_safe);
+        cbv [fill_hole refine_hole without_holes choice_ctx].
+
+
+      (* generalize, unpack_whp and done *)
       match goal with |- context [(eif ?b then ?x else ?y)%expr]
                       => generalize b; let b := fresh "b" in intros b end.
       generalize (skey2message@(skeygen@($ irrelevant))); intro _k.
-       *)
-
-      (* auth rule with signatures *)
-      (* probably unpack_whp and done *)
-    Abort.
+      unpack_whp.
+      match goal with
+      | |- ?x = true => change (is_true x)
+      end.
+      destruct b; autorewrite with push_is_true; reflexivity.
+    Admitted.
   End ExampleProtocol1.
 End Language.

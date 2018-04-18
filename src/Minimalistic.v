@@ -51,7 +51,7 @@ Section Language.
     end%expr.
 
   (* TODO: use a map with a canonical representation *)
-  Global Instance randomness_map_eq_dec {eta} : EqDec (PositiveMap.t (interp_type trand eta)). Admitted.
+  Global Instance randomness_map_eq_dec {eta} : EqDec (PositiveMap.tree (interp_type trand eta)). Admitted.
 
   Context (cast_rand : forall eta, Bvector eta -> interp_type trand eta).
   Section GenerateRandomness.
@@ -60,20 +60,20 @@ Section Language.
     Definition genrand : Comp _ := (r <-$ {0,1}^eta; ret (cast_rand eta r)).
     (* TODO: use [genrand] in the remainder of this section *)
 
-    Definition generate_randomness_single i rndC :=
+    Definition generate_randomness_single i (rndC : Comp (PositiveMap.tree _)) :=
       rnds' <-$ rndC;
         ri <-$ {0,1}^eta;
-        ret (PositiveMap.add i (cast_rand eta ri) rnds').
+        ret (PositiveMap.add i (cast_rand eta ri) rnds' : PositiveMap.tree _).
 
     Definition generate_randomness idxs
-      : Comp (PositiveMap.t (interp_type trand eta))
+      : Comp (PositiveMap.tree (interp_type trand eta))
       := PositiveSet.fold generate_randomness_single
                           idxs
-                          (ret (PositiveMap.empty _)).
+                          (ret (PositiveMap.empty _ : PositiveMap.tree _)).
 
     Lemma empty_randomness :
       Comp_eq (generate_randomness PositiveSet.empty)
-              (ret (PositiveMap.empty _)).
+              (ret (PositiveMap.empty _ : PositiveMap.tree _)).
     Proof.
       intros; cbv [generate_randomness].
       rewrite PositiveSetProperties.fold_empty.
@@ -1020,14 +1020,14 @@ Section Language.
       cbv [generate_randomness] in *.
       intros eta s.
       eapply PositiveSetProperties.fold_rec with
-          (A := Comp (PositiveMap.t (interp_type trand eta)))
+          (A := Comp (PositiveMap.tree (interp_type trand eta)))
           (P := fun s r =>
                   forall m,
                     In m (getSupport r) ->
                     forall x,
-                      PositiveMap.In x m -> PositiveSet.In x s)
+                      PositiveMap.In x (m : PositiveMap.tree _) -> PositiveSet.In x s)
           (f := generate_randomness_single eta)
-          (i := ret PositiveMap.empty (interp_type trand eta)).
+          (i := ret (PositiveMap.empty (interp_type trand eta) : PositiveMap.tree _)).
       - intros.
         exfalso.
         cbv [In getSupport] in *.
@@ -1066,7 +1066,7 @@ Section Language.
       forall eta s,
         PositiveSet.Empty s ->
         Comp_eq (generate_randomness eta s)
-                (ret PositiveMap.empty (interp_type trand eta)).
+                (ret (PositiveMap.empty (interp_type trand eta) : PositiveMap.tree _)).
     Proof.
       intros; eapply PositiveSetProperties.fold_1; intuition.
     Qed.
@@ -1125,7 +1125,7 @@ Section Language.
       ~PositiveSet.In x s ->
       Comp_eq (generate_randomness eta s)
               (r <-$ generate_randomness eta s;
-                 ret PositiveMap.remove x r).
+                 ret (PositiveMap.remove x r : PositiveMap.tree _)).
       intros.
       rewrite <- Bind_Ret_r with (cA := generate_randomness eta s) at 1.
       cbv [Comp_eq image_relation pointwise_relation].
@@ -1148,9 +1148,9 @@ Section Language.
       forall eta s mask,
         (Comp_eq (generate_randomness eta (PositiveSet.inter s mask))
                  (r <-$ (generate_randomness eta s);
-                    ret PositiveMapProperties.filter
+                    ret (PositiveMapProperties.filter
                         (fun k _ =>
-                           PositiveSet.mem k mask) r)).
+                           PositiveSet.mem k mask) r : PositiveMap.tree _))).
     Proof.
       intros eta s.
       pattern s.
@@ -1172,13 +1172,13 @@ Section Language.
                                PositiveMapProperties.filter
                                  (fun k _ => PositiveSet.mem k mask) r in
                            if PositiveSet.mem x mask
-                           then PositiveMap.add x (cast_rand eta a) fm
+                           then PositiveMap.add x (cast_rand eta a) fm : PositiveMap.tree _
                            else PositiveMap.remove x fm))
                      (fm <-$ (r <-$ generate_randomness eta s;
-                              ret PositiveMapProperties.filter
-                                  (fun k _ => PositiveSet.mem k mask) r);
+                              ret (PositiveMapProperties.filter
+                                  (fun k _ => PositiveSet.mem k mask) r : PositiveMap.tree _));
                       ret if PositiveSet.mem x mask
-                          then PositiveMap.add x (cast_rand eta a) fm
+                          then (PositiveMap.add x (cast_rand eta a) fm : PositiveMap.tree _)
                           else PositiveMap.remove x fm)) as E.
         {
           intros.
@@ -1210,9 +1210,9 @@ Section Language.
         PositiveSet.Subset s s' ->
         (Comp_eq (generate_randomness eta s)
                  (r <-$ (generate_randomness eta s');
-                    ret PositiveMapProperties.filter
+                    ret (PositiveMapProperties.filter
                         (fun k _ =>
-                           PositiveSet.mem k s) r)).
+                           PositiveSet.mem k s) r : PositiveMap.tree _))).
     Proof.
       intros.
       rewrite <- PositiveSetProperties.inter_subset_equal with
@@ -1246,7 +1246,7 @@ Section Language.
       setoid_rewrite E at 2; clear E.
 
       setoid_rewrite <- Bind_Ret_l with
-          (f := fun r => ret interp_fixed e eta adv r) at 2.
+          (f := fun r => ret interp_fixed e eta adv (r : PositiveMap.tree _)) at 2.
 
       rewrite Bind_assoc.
 
@@ -1319,11 +1319,11 @@ Section Language.
       rewrite Bind_assoc_2 with
           (g := (fun e r =>
                    ret negb (inspect_vbool
-                               (interp_fixed b eta (adv eta e) r)))).
+                               (interp_fixed b eta (adv eta e) (r : PositiveMap.tree _))))).
       rewrite Bind_assoc_2 with
           (g := (fun e r =>
                    ret negb (inspect_vbool
-                               (interp_fixed a eta (adv eta e) r)))).
+                               (interp_fixed a eta (adv eta e) (r : PositiveMap.tree _))))).
 
       eapply pr_weaken.
       intros x _.

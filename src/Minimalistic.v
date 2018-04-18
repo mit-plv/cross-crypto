@@ -1652,6 +1652,9 @@ Section Language.
     Qed.
   End Equality.
 
+  Lemma feqb_refl {t} (x : expr t) : eqwhp (x == x) #vtrue.
+  Proof. unpack_whp; rewrite eqb_refl; btauto. Qed.
+
   Ltac fold_eqwhp :=
     repeat match goal with
            | H : context[whp (?a == ?b)] |- _ =>
@@ -2519,7 +2522,8 @@ Section Language.
     Context (skn1 skn2 Kn irrelevant : positive)
             (nodup : NoDup (skn1 :: skn2 :: Kn :: irrelevant :: nil)%list).
 
-    Example auth_from_conf :
+    Example auth_from_conf
+      (ignoring_nonce_reuse : forall a b c d e f g h, @no_nonce_reuse a b c d e f g h) :
       whp (
           let sk1 := ekeygen@($skn1) in
           let sk2 := mkeygen@($skn2) in
@@ -2550,51 +2554,22 @@ Section Language.
           let verify_out := sverify@(pK, adv_out_2_msg, adv_out_2_sig) in
           verify_out -> adv_out_2_msg == adv_out_msg).
     Proof.
-      cbv zeta.
-
-      (* auth rule with mac on skn2 *)
-      rewrite (rewrite_verify mac_correct skn2)
-        by (solve_eq_fill_hole_r || solve_auth_safe);
-        cbv [fill_hole refine_hole without_holes choice_ctx].
-
-      rewrite decrypt_encrypt.
-      clear dependent decrypt ||
-            lazymatch goal with
-            | |- context[decrypt@(_, ?D)] =>
-              fail "BAD DECRYPTION OF" D
-            end.
-      rewrite message2skey_skey2message.
-      clear dependent message2skey.
-
-      (* encryption rule with skn1 *)
-      let sk := constr:(skn1) in
-      let msg2 := constr:(skey2message@(skeygen@($ irrelevant))) in
-      lazymatch goal with
-      | |- context[(encrypt@(ekeygen@($sk), ?nonce, ?msg1))%expr] =>
-        rewrite (fill_confidentiality confidentiality sk nonce msg1 msg2) by
-            (solve_eq_fill_hole_r ||
-             solve_encrypt_safe ||
-             lazymatch goal with |- no_nonce_reuse _ _ => admit (* formulation WIP *) end ||
-             exact (eq_len_skey2message_skeygen _ _));
-          cbv [fill_hole]
+      repeat match goal with
+      | |- whp #vtrue => exact whp_true
+      | _ => progress cbv [fill_hole refine_hole without_holes choice_ctx]
+      | _ => progress rewrite ?decrypt_encrypt, ?message2skey_skey2message, ?impl_if, ?if_same, ?feqb_refl
+      | _ => rewrite (rewrite_verify mac_correct)       by (solve_eq_fill_hole_r || solve_auth_safe)
+      | _ => rewrite (rewrite_verify signature_correct) by (solve_eq_fill_hole_r || solve_auth_safe)
+      | |- context[(encrypt@(ekeygen@($?sk), ?nonce, ?msg1))%expr] =>
+        progress ( (* speedup: instead of progress, just check that msg2 and msg1 are not syntactically equal *)
+            let msg2 := constr:(skey2message@(skeygen@($ irrelevant))) in
+            rewrite (fill_confidentiality confidentiality sk nonce msg1 msg2) by
+                (solve_eq_fill_hole_r ||
+                 solve_encrypt_safe ||
+                 exact (ignoring_nonce_reuse _ _ _ _ _ _ _ _) (* FIXME: reformulate no_nonce_reuse *) ||
+                 exact (eq_len_skey2message_skeygen _ _));
+            cbv [fill_hole refine_hole without_holes choice_ctx])
       end.
-
-      (* auth rule with signatures on Kn *)
-      rewrite impl_if.
-      rewrite (rewrite_verify signature_correct Kn)
-        by (solve_eq_fill_hole_r || solve_auth_safe);
-        cbv [fill_hole refine_hole without_holes choice_ctx].
-
-
-      (* generalize, unpack_whp and done *)
-      match goal with |- context [(eif ?b then ?x else ?y)%expr]
-                      => generalize b; let b := fresh "b" in intros b end.
-      generalize (skey2message@(skeygen@($ irrelevant))); intro _k.
-      unpack_whp.
-      match goal with
-      | |- ?x = true => change (is_true x)
-      end.
-      destruct b; autorewrite with push_is_true; reflexivity.
-    Admitted.
+    Qed.
   End ExampleProtocol1.
 End Language.

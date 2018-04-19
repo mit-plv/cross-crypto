@@ -6,7 +6,11 @@ Require Import CrossCrypto.Util CrossCrypto.RatUtil CrossCrypto.RewriteUtil Cros
 Require Import Lia. (* TODO: remove after removing not_negligible_const *)
 
 Require Import Coq.btauto.Btauto.
-Lemma eqb_bool a b : (a ?= b) = negb (xorb a b). Admitted.
+Lemma eqb_bool a b : (a ?= b) = negb (xorb a b).
+Proof.
+  destruct a; destruct b;
+    (rewrite eqb_leibniz || rewrite eqb_false_iff); congruence.
+Qed.
 Ltac btauto' := btauto.
 Ltac btauto := cbv [implb] in *; rewrite ?eqb_bool; rewrite ?eqb_bool in *; btauto'.
 
@@ -1934,7 +1938,6 @@ Section Language.
         ewh_pair (without_holes e1) (without_holes e2)
       end.
 
-    (* TODO we actually have syntactic equality here *)
     Lemma fill_without_holes {hole} {t} (x : expr hole) (e : expr t) :
       fill_hole (without_holes e) x = e.
     Proof.
@@ -2008,11 +2011,10 @@ Section Language.
       | ewh_pair a b => ewh_pair (refine_hole A a) (refine_hole A b)
       end.
 
-    (* TODO we actually have syntactic equality here *)
     Lemma fill_refine_hole {t1 t2 t3}
           (A : @expr_with_hole t1 t2) (B : @expr_with_hole t2 t3)
           (e : expr t1) :
-      eqwhp (fill_hole (refine_hole A B) e) (fill_hole B (fill_hole A e)).
+      fill_hole (refine_hole A B) e = fill_hole B (fill_hole A e).
     Proof.
       revert A e; induction B; intros A e; cbn [fill_hole refine_hole];
         try reflexivity.
@@ -2081,9 +2083,10 @@ Section Language.
     end.
 
   Section Authenticity.
-    Context {tmessage ttag tskey tvkey : type}
+    Context {tmessage ttag tskey tvkey tpkey : type}
             {skeygen : (trand -> tskey)%etype}
             {vkeygen : (tskey -> tvkey)%etype}
+            {pkeygen : (tskey -> tpkey)%etype}
             {auth : (tskey * tmessage -> ttag)%etype}
             {verify : (tvkey * tmessage * ttag -> tbool)%etype}.
 
@@ -2092,6 +2095,7 @@ Section Language.
     | asauth m l : auth_safe' sk m l ->
                    auth_safe' sk (auth@(skeygen@$sk, m)) (m :: l)
     | asverify m t : auth_safe' sk (verify@(vkeygen@(skeygen@$sk), m, t)) nil
+    | aspkey : auth_safe' sk (pkeygen@(skeygen@$sk)) nil (* fixme *)
     | asrand_neq (i : positive) : i <> sk -> auth_safe' sk ($i) nil
     (* boring recursion: *)
     | asconst t v : @auth_safe' sk t #v nil
@@ -2221,13 +2225,16 @@ Section Language.
         fold_eqwhp; reflexivity.
     Qed.
 
-    Context {tmessage ttag tskey tvkey : type}
+    Context {tmessage ttag tskey tvkey tpkey : type}
             {skeygen : (trand -> tskey)%etype}
             {vkeygen : (tskey -> tvkey)%etype}
+            {pkeygen : (tskey -> tpkey)%etype}
             {auth : (tskey * tmessage -> ttag)%etype}
             {verify : (tvkey * tmessage * ttag -> tbool)%etype}
-            (auth_correct : @auth_conclusion tmessage ttag tskey tvkey
-                                             skeygen vkeygen auth verify).
+            (auth_correct : @auth_conclusion tmessage ttag tskey tvkey tpkey
+                                             skeygen vkeygen pkeygen
+                                             auth verify).
+
     Fixpoint choice_ctx {t1 t2} m (C : expr_with_hole t2)
              (l0 : expr t1) (l : list (expr t1)) :=
       match l with
@@ -2259,19 +2266,19 @@ Section Language.
         rewrite fill_if_comm; reflexivity.
     Qed.
 
-    Let auth_safe := @auth_safe tmessage ttag tskey tvkey
-                                skeygen vkeygen auth verify.
+    Let auth_safe := @auth_safe tmessage ttag tskey tvkey tpkey
+                                skeygen vkeygen pkeygen auth verify.
     Lemma rewrite_verify
           sk {tag m}
           {t e} {C : expr_with_hole t} (Hhandler : eqwhp e (fill_hole C m))
-          {choice0 choices} (Hchoices : auth_safe sk _ tag (cons choice0 choices ))
+          {choice0 choices} (_ : auth_safe sk _ tag (cons choice0 choices ))
           {err : expr t}
       : let ve := verify@(vkeygen@(skeygen@($sk)), m, tag) in
         eqwhp (eif ve then e else err)
               (eif ve then choice_ctx m C choice0 choices else err).
     Proof.
       intros.
-      rewrite Hhandler.
+      rewrite Hhandler; clear Hhandler.
 
       assert (whp (ve -> fill_hole C m == choice_ctx m C choice0 choices)).
       {
@@ -2476,18 +2483,18 @@ Section Language.
             {sign : (tskey * tmessage -> tsignature)%etype}
             {sverify : (tpkey * tmessage * tsignature -> tbool)%etype}
             {signature_correct :
-               @auth_conclusion
-                 tmessage
-                 tsignature tskey tpkey skeygen pkeygen sign sverify}.
+               @auth_conclusion tmessage tsignature tskey tpkey tpkey
+                                skeygen pkeygen pkeygen sign sverify}.
 
-    Context {tmac tmkey : type}
+    Context {tmac tmkey tunit : type}
             {mkeygen : (trand -> tmkey)%etype}
             {idmkey : (tmkey -> tmkey)%etype}
+            {unit_f : forall {t}, (t -> tunit)%etype}
             {mac : (tmkey * tmessage -> tmac)%etype}
             {mverify : (tmkey * tmessage * tmac -> tbool)%etype}
             {mac_correct :
-               @auth_conclusion tmessage tmac tmkey tmkey
-                                mkeygen idmkey mac mverify}.
+               @auth_conclusion tmessage tmac tmkey tmkey tunit
+                                mkeygen idmkey unit_f mac mverify}.
 
     Context {tkey tnonce : type}
             {ekeygen : (trand -> tkey)%etype}
@@ -2529,9 +2536,10 @@ Section Language.
           let sk2 := mkeygen@($skn2) in
           let sK := skeygen@($Kn) in
           let msK := skey2message@sK in
+          let pK := pkeygen@sK in
           let enc_out := encrypt@(sk1, #N, msK) in
           let mac_out := mac@(sk2, enc_out) in
-          let net_in_1 := (enc_out, mac_out)%expr in
+          let net_in_1 := (pK, (enc_out, mac_out))%expr in
 
           let adv_out_1 := !(tmessage * tmac * tmessage)@net_in_1 in
           let adv_out_enc := ffst@(ffst@adv_out_1) in
@@ -2542,15 +2550,15 @@ Section Language.
           let dec_msg := dec_out in
           let sK' := message2skey@dec_msg in
           let sign_out := sign@(sK', adv_out_msg) in
-          let net_in_good := (sign_out, (adv_out_msg, net_in_1))%expr in
+          let pK' := pkeygen@sK' in
+          let net_in_good := (pK', (sign_out, (adv_out_msg, net_in_1)))%expr in
           let net_in_2 := (eif check_out
                            then net_in_good
-                           else (#!, (#!, net_in_1)))%expr in
+                           else (#!, (#!, (#!, net_in_1))))%expr in
 
           let adv_out_2 := !(tmessage * tsignature)@net_in_2 in
           let adv_out_2_msg := ffst@adv_out_2 in
           let adv_out_2_sig := fsnd@adv_out_2 in
-          let pK := pkeygen@sK in
           let verify_out := sverify@(pK, adv_out_2_msg, adv_out_2_sig) in
           verify_out -> adv_out_2_msg == adv_out_msg).
     Proof.

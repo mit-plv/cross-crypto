@@ -2464,16 +2464,6 @@ Section Language.
       unify e C; reflexivity
     end.
 
-  Ltac expr_head x :=
-    match x with
-    | expr_const _ => idtac
-    | expr_random _ => idtac
-    | expr_adversarial _ => idtac
-    | expr_app _ _ => idtac
-    | expr_pair _ _ => idtac
-    | _ => fail
-    end.
-
   Section ExampleProtocol1.
     Context {tmessage tsignature tskey tpkey : type}
             {eq_len : (tmessage * tmessage -> tbool)%etype}.
@@ -2515,11 +2505,6 @@ Section Language.
 
     (* hardcoded nonce *)
     Context {N : forall eta, interp_type tnonce eta}.
-    Context  {tlist : type -> type}
-             {cnil : forall t eta, interp_type (tlist t) eta}
-             {fcons : forall t, (t * tlist t -> tlist t)%etype}.
-    Arguments cnil {_}.
-    Arguments fcons {_}.
 
     Context {ffst : forall t1 t2, (t1 * t2 -> t1)%etype}
             {fsnd : forall t1 t2, (t1 * t2 -> t2)%etype}.

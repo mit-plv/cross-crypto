@@ -1,4 +1,5 @@
 Require CrossCrypto.fmap.list_of_pairs.
+Require CrossCrypto.Loops.
 
 (* TODO: moveme *)
 Fixpoint Fixn {A B} (n:nat) (f : (A -> option B) -> A -> option B) {struct n}
@@ -15,11 +16,11 @@ Fixpoint Fixn_silent {A B} (inhabited_B:B) (n:nat) (f : (A -> B) -> A -> B) {str
   end.
 
 Lemma Fixn_partial_correctness {A B} n (f : _ -> A -> option B)
-      (P : A -> B -> Prop)
-      (ok := fun F => forall a b, F a = Some b -> P a b)
+      (P : A -> B -> Prop) :
+      match (fun F => forall a b, F a = Some b -> P a b) with ok => forall
       (Hstep : forall F, ok F -> ok (f F))
-  : ok (Fixn n f).
-Proof. induction n; cbn; refine (Hstep _ _); [congruence|assumption]. Qed.
+  , ok (Fixn n f) end.
+Proof. intros; induction n; cbn; refine (Hstep _ _); [congruence|assumption]. Qed.
 
 Module monad.
   Record monad :=
@@ -357,7 +358,7 @@ Module simply_typed.
         (program : list (type*operation)).
 
       Definition unify_operation : (type * operation) * (type * operation) * map * map -> option (map*map) :=
-        Fixn (length program) (fun recurse '(ol, op, lem2prog, prog2lem) =>
+        Fixn (length lemma) (fun recurse '(ol, op, lem2prog, prog2lem) =>
           let '(tl, ol) := ol in
           let '(tp, op) := op in
           match type.transport (fun _ => unit) tp tl tt with
@@ -385,6 +386,68 @@ Module simply_typed.
             | _, _ => None
             end
           end).
+
+      Context (lemma_last : type * operation).
+      Context (prog_last : type * operation).
+
+      Definition translate_operation (m : map) (o : operation) : option operation :=
+        match o with
+        | id il => option_map id (find il m)
+        | const _ _ => Some o
+        end.
+
+      Definition option_all {T} : list (option T) -> option (list T) :=
+        List.fold_right (fun ox ol =>
+                           match ox, ol with
+                           | Some x, Some l => Some (cons x l)
+                           | _, _ => None
+                           end)
+                           (Some nil).
+
+      Definition translate (m : map) (e : expr) : option expr :=
+        let '(l, o) := e in
+        match option_all (List.map (fun '(t, o) =>
+                                      match translate_operation m o with
+                                      | Some o' => Some (t, o)
+                                      | None => None
+                                      end)
+                                   l)
+        with None => None
+        | Some l' =>
+          match translate_operation m o
+          with None => None
+          | Some o' =>
+            Some (l', o')
+          end
+        end.
+        
+
+      Check
+        fun lemma_rhs : expr =>
+          Loops.core.loop
+            (fun '(op, iNext) =>
+               match unify_operation (lemma_last, op, empty, empty) with
+               | None => inl (nth_default op program iNext, iNext-1)
+               | Some x => inr x
+               end)
+            (length program) (prog_last, length program - 1).
+      Check Loops.for3 (length lemma) (fun i => Nat.ltb 0 i) (fun i => 1+i)
+            (fun _ => _).
+
+      Lemma unify_operation_correct args ret:
+        unify_operation args = Some ret -> True.
+      Proof.
+        cbv [unify_operation].
+        refine (Fixn_partial_correctness _ _ _ _ _ _); clear args ret;
+          intros recurse IH [[[[tl ol] [tp op]] lem2prog] prog2lem] [lem2prog' prog2lem'].
+        destruct ol, op;
+          repeat match goal with
+                 | _ => discriminate
+                 | |- context [match ?E with None => _ | _ => _ end] => destruct E eqn:?
+                 | |- context[eqb_const ?t ?a ?b] => destruct (eqb_const t a b) eqn:?
+                 end.
+             
+      Abort.
     End unification.
 
     Import CrossCrypto.fmap.list_of_pairs.

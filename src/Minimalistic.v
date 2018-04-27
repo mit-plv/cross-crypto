@@ -57,7 +57,11 @@ Section Language.
   (* TODO: use a map with a canonical representation *)
   Global Instance randomness_map_eq_dec {eta} : EqDec (PositiveMap.tree (interp_type trand eta)). Admitted.
 
-  Context (cast_rand : forall eta, Bvector eta -> interp_type trand eta).
+  Context (ffst : forall t1 t2, (t1 * t2 -> t1)%etype)
+          (fsnd : forall t1 t2, (t1 * t2 -> t2)%etype)
+          (cast_rand : forall eta, Bvector eta -> interp_type trand eta).
+  Global Arguments ffst {_ _}.
+  Global Arguments fsnd {_ _}.
   Section GenerateRandomness.
     Context (eta:nat).
 
@@ -1914,9 +1918,10 @@ Section Language.
     | ewh_pair {t1 t2} (_:expr_with_hole t1) (_:expr_with_hole t2)
       : expr_with_hole (t1 * t2)
     | ewh_hole : expr_with_hole hole.
+    Global Arguments expr_with_hole : clear implicits.
 
     Fixpoint fill_hole {hole t}
-             (E : @expr_with_hole hole t) (e : expr hole) : expr t :=
+             (E : expr_with_hole hole t) (e : expr hole) : expr t :=
       match E with
       | ewh_hole => e
       (* recurse *)
@@ -1948,7 +1953,7 @@ Section Language.
     Qed.
 
     Lemma fill_eqwhp_internal {hole t} (e1 e2 : expr hole)
-          (E : @expr_with_hole hole t) :
+          (E : expr_with_hole hole t) :
       whp (e1 == e2 -> fill_hole E e1 == fill_hole E e2).
     Proof.
       unpack_whp.
@@ -1961,14 +1966,14 @@ Section Language.
     Qed.
 
     Corollary rewrite_eqwhp_internal {hole} (e1 e2 : expr hole)
-              (E : @expr_with_hole hole tbool) :
+              (E : expr_with_hole hole tbool) :
       eqwhp (e1 == e2 -> fill_hole E e1) (e1 == e2 -> fill_hole E e2).
     Proof.
       eapply whp_cond_rew.
       eapply fill_eqwhp_internal.
     Qed.
 
-    Global Instance Proper_fill_hole {t1 t2} (C : @expr_with_hole t1 t2)
+    Global Instance Proper_fill_hole {t1 t2} (C : expr_with_hole t1 t2)
       : Proper (eqwhp ==> eqwhp) (fill_hole C).
     Proof.
       intros x y.
@@ -1976,7 +1981,7 @@ Section Language.
       eapply fill_eqwhp_internal.
     Qed.
 
-    Lemma fill_cond_true a {t} (e e' : expr t) (C : expr_with_hole tbool) :
+    Lemma fill_cond_true a {t} (e e' : expr t) (C : expr_with_hole _ tbool) :
       eqwhp (a -> fill_hole C (eif a then e else e')) (a -> fill_hole C e).
     Proof.
       cbv [eqwhp].
@@ -1987,7 +1992,7 @@ Section Language.
       eauto.
     Qed.
 
-    Lemma fill_cond_false a {t} (e e' : expr t) (C : expr_with_hole tbool) :
+    Lemma fill_cond_false a {t} (e e' : expr t) (C : expr_with_hole _ tbool) :
       eqwhp (~a -> fill_hole C (eif a then e else e')) (~a -> fill_hole C e').
     Proof.
       cbv [eqwhp].
@@ -1999,8 +2004,8 @@ Section Language.
     Qed.
 
     Fixpoint refine_hole {t1 t2 t3}
-             (A : @expr_with_hole t1 t2) (B : @expr_with_hole t2 t3)
-      : @expr_with_hole t1 t3 :=
+             (A : expr_with_hole t1 t2) (B : expr_with_hole t2 t3)
+      : expr_with_hole t1 t3 :=
       match B with
       | ewh_hole => A
       (* recurse *)
@@ -2012,7 +2017,7 @@ Section Language.
       end.
 
     Lemma fill_refine_hole {t1 t2 t3}
-          (A : @expr_with_hole t1 t2) (B : @expr_with_hole t2 t3)
+          (A : expr_with_hole t1 t2) (B : expr_with_hole t2 t3)
           (e : expr t1) :
       fill_hole (refine_hole A B) e = fill_hole B (fill_hole A e).
     Proof.
@@ -2023,6 +2028,50 @@ Section Language.
       - rewrite IHB1; rewrite IHB2; reflexivity.
     Qed.
   End Holes.
+
+  Section shift.
+    Context (offset : positive).
+    Fixpoint shift {t1 t2} (C : expr_with_hole t1 t2) : expr_with_hole t1 t2 :=
+      match C with
+      | ewh_const c => ewh_const c
+      | ewh_random i => ewh_random (Pos.add offset i)
+      | ewh_adversarial e => ewh_adversarial (shift e)
+      | ewh_app f e => ewh_app f (shift e)
+      | ewh_pair e1 e2 => ewh_pair (shift e1) (shift e2)
+      | ewh_hole => ewh_hole
+      end.
+  End shift.
+
+  Definition ewh_alpha_away_from (idxs : PositiveSet.t) {t1 t2} (C:expr_with_hole t1 t2)
+    : expr_with_hole t1 t2 :=
+    let offset := PositiveSet.fold Pos.max idxs xH in
+    shift offset C.
+
+  Definition fill_alpha {t1 t2} (C:expr_with_hole t1 t2) (e:expr t1) : expr t2 :=
+    let C' := ewh_alpha_away_from (randomness_indices e) C in
+    fill_hole C' e.
+
+  Section interaction.
+    Context (tlist : type -> type)
+            (cnil : forall t eta, interp_type (tlist t) eta)
+            (fcons : forall t, func (t * tlist t) (tlist t)).
+    Global Arguments cnil {_} _.
+    Global Arguments fcons {_}.
+    Context
+      {i o s}
+      (init : expr (tlist o * s))
+      (step : expr_with_hole (i*s) (o*s)).
+    Fixpoint interaction1 (n : nat) {struct n} : expr (tlist o * s)
+      := match n with
+         | O => init
+         | S n' =>
+           let outs'_s' := interaction1 n' in
+           let outs' := ffst@outs'_s' in
+           let s' := fsnd@outs'_s' in
+           let o_s := fill_alpha step (!@outs', s') in
+           (fcons@(ffst@o_s, outs'), fsnd@o_s)
+         end.
+  End interaction.
 
   Ltac build_context x e :=
     match e with
@@ -2235,7 +2284,7 @@ Section Language.
                                              skeygen vkeygen pkeygen
                                              auth verify).
 
-    Fixpoint choice_ctx {t1 t2} m (C : expr_with_hole t2)
+    Fixpoint choice_ctx {t1 t2} m (C : expr_with_hole _ t2)
              (l0 : expr t1) (l : list (expr t1)) :=
       match l with
       | nil => fill_hole C l0
@@ -2244,7 +2293,7 @@ Section Language.
                       else choice_ctx m C l1 l)%expr
       end.
 
-    Lemma fill_if_comm {t1 t2} (C : expr_with_hole t2) a (b c : expr t1) :
+    Lemma fill_if_comm {t1 t2} (C : expr_with_hole _ t2) a (b c : expr t1) :
       eqwhp (fill_hole C (eif a then b else c))
             (eif a then fill_hole C b else fill_hole C c).
     Proof.
@@ -2254,7 +2303,7 @@ Section Language.
     Qed.
 
     Lemma choice_ctx_as_fill {t1 t2}
-          m (C : expr_with_hole t2) l0 (l : list (expr t1)) :
+          m (C : expr_with_hole _ t2) l0 (l : list (expr t1)) :
       eqwhp (choice_ctx m C l0 l)
             (fill_hole C (choice m l0 l)).
     Proof.
@@ -2270,7 +2319,7 @@ Section Language.
                                 skeygen vkeygen pkeygen auth verify.
     Lemma rewrite_verify
           sk {tag m}
-          {t e} {C : expr_with_hole t} (Hhandler : eqwhp e (fill_hole C m))
+          {t e} {C : expr_with_hole _ t} (Hhandler : eqwhp e (fill_hole C m))
           {choice0 choices} (_ : auth_safe sk _ tag (cons choice0 choices ))
           {err : expr t}
       : let ve := verify@(vkeygen@(skeygen@($sk)), m, tag) in
@@ -2372,7 +2421,7 @@ Section Language.
         e ≈ e'.
 
     Lemma fill_eq_mod_enc sk nonce msg1 msg2 {t}
-          (eh : @expr_with_hole tmessage t) :
+          (eh : expr_with_hole tmessage t) :
       whp (eq_len@(msg1, msg2)) ->
       eq_mod_enc sk
                  (fill_hole eh (encrypt@(keygen@($sk), nonce, msg1)))
@@ -2384,7 +2433,7 @@ Section Language.
     Context (conf : confidentiality_conclusion).
 
     Lemma fill_confidentiality sk nonce msg1 msg2 {t}
-          (eh : @expr_with_hole tmessage t) e1 :
+          (eh : expr_with_hole tmessage t) e1 :
       encrypt_safe sk e1 ->
       no_nonce_reuse sk e1 ->
       e1 = fill_hole eh (encrypt@(keygen@($sk), nonce, msg1)) ->
@@ -2505,11 +2554,6 @@ Section Language.
 
     (* hardcoded nonce *)
     Context {N : forall eta, interp_type tnonce eta}.
-
-    Context {ffst : forall t1 t2, (t1 * t2 -> t1)%etype}
-            {fsnd : forall t1 t2, (t1 * t2 -> t2)%etype}.
-    Arguments ffst {_ _}.
-    Arguments fsnd {_ _}.
 
     Context (skn1 skn2 Kn irrelevant : positive)
             (nodup : NoDup (skn1 :: skn2 :: Kn :: irrelevant :: nil)%list).

@@ -39,9 +39,9 @@ Section Language.
 
   Local Notation "'#' x" := (expr_const x) (right associativity, at level 9, format "# x") : expr_scope.
   Local Notation "'$' x" := (expr_random x%positive) (right associativity, at level 79, x at next level, format "$ x") : expr_scope. (* FIXME: we want level 9, but it conflicts with fcf *)
-  Local Notation "f @ x" := (expr_app f x) (left associativity, at level 11, format "f @ x").
-  Local Notation "'!' t '@' x" := (@expr_adversarial _ t x%expr) (left associativity, at level 11, format "! t @ x", t at next level).
-  Local Notation "'!' '@' x" := (expr_adversarial x%expr) (left associativity, at level 11, format "! @ x").
+  Local Notation "f @ x" := (expr_app f x%expr) (left associativity, at level 11, format "f @ x") : expr_scope.
+  Local Notation "'!' t '@' x" := (@expr_adversarial _ t x%expr) (left associativity, at level 11, format "! t @ x", t at next level) : expr_scope.
+  Local Notation "'!' '@' x" := (expr_adversarial x%expr) (left associativity, at level 11, format "! @ x") : expr_scope.
   Local Notation "( x , y , .. , z )" := (expr_pair .. (expr_pair x%expr y%expr) .. z%expr) : expr_scope.
   Local Notation "'#!'" := (expr_const (interp_type_inhabited _)) : expr_scope.
 
@@ -344,7 +344,7 @@ Section Language.
 
   Context (feqb : forall {t}, (t*t -> tbool)%etype).
   Arguments feqb {_}.
-  Local Notation "a == b" := (feqb@(a, b)) : expr_scope.
+  Local Notation "a == b" := (feqb@(a, b))%expr : expr_scope.
   Arguments feqb {_}.
   Context (interp_feqb : forall t eta (v1 v2:interp_type t eta),
               inspect_vbool (interp_func feqb (interp_pair v1 v2))
@@ -354,22 +354,22 @@ Section Language.
           (interp_fand : forall eta v1 v2,
               inspect_vbool (interp_func fand (interp_pair v1 v2)) =
               andb (inspect_vbool v1) (inspect_vbool (eta:=eta) v2)).
-  Local Notation "a /\ b" := (fand@(a, b)) : expr_scope.
+  Local Notation "a /\ b" := (fand@(a, b))%expr : expr_scope.
   Context (f_or : (tbool * tbool -> tbool)%etype)
           (interp_f_or : forall eta v1 v2,
               inspect_vbool (interp_func f_or (interp_pair v1 v2)) =
               orb (inspect_vbool v1) (inspect_vbool (eta:=eta) v2)).
-  Local Notation "a \/ b" := (f_or@(a, b)) : expr_scope.
+  Local Notation "a \/ b" := (f_or@(a, b))%expr : expr_scope.
   Context (fimpl : (tbool * tbool -> tbool)%etype)
           (interp_fimpl : forall eta v1 v2,
               inspect_vbool (interp_func fimpl (interp_pair v1 v2)) =
               implb (inspect_vbool v1) (inspect_vbool (eta:=eta) v2)).
-  Local Notation "a -> b" := (fimpl@(a, b)) : expr_scope.
+  Local Notation "a -> b" := (fimpl@(a, b))%expr : expr_scope.
   Context (fnegb : (tbool -> tbool)%etype)
           (interp_fnegb : forall eta v,
               inspect_vbool (interp_func fnegb v) =
               negb (inspect_vbool (eta:=eta) v)).
-  Local Notation "~ a" := (fnegb@a) : expr_scope.
+  Local Notation "~ a" := (fnegb@a)%expr : expr_scope.
   Context (ite : forall t, (tbool * t * t -> t)%etype).
   Arguments ite {_}.
   Context (interp_ite :
@@ -378,7 +378,7 @@ Section Language.
                if inspect_vbool b then v1 else v2).
   Arguments interp_ite {_ _}.
   Local Notation "'eif' b 'then' x 'else' y" :=
-    (ite@(b,x,y))
+    (ite@(b,x,y))%expr
       (at level 200, b at level 1000, x at level 1000, y at level 1000,
        format "'[hv' 'eif'  b  '/' '[' 'then'  x  ']' '/' '[' 'else'  y ']' ']'")
     : expr_scope.
@@ -2029,6 +2029,21 @@ Section Language.
     Qed.
   End Holes.
 
+  Bind Scope ewh_scope with expr_with_hole.
+  Delimit Scope ewh_scope with ewh.
+  Local Notation "'#' x" := (ewh_const x) : ewh_scope.
+  Local Notation "'$' x" := (ewh_random x%positive) : ewh_scope.
+  Local Notation "f @ x" := (ewh_app f x%ewh) : ewh_scope.
+  Local Notation "'!' t '@' x" := (@ewh_adversarial _ t x%ewh) : ewh_scope.
+  Local Notation "'!' '@' x" := (ewh_adversarial x%ewh) : ewh_scope.
+  Local Notation "( x , y , .. , z )" := (ewh_pair .. (ewh_pair x%ewh y%ewh) .. z%ewh) : ewh_scope.
+  Local Notation "'#!'" := (ewh_const (interp_type_inhabited _)) : ewh_scope.
+  Local Notation "'eif' b 'then' x 'else' y" :=
+    (ite@(b,x,y))%ewh
+      (at level 200, b at level 1000, x at level 1000, y at level 1000,
+       format "'[hv' 'eif'  b  '/' '[' 'then'  x  ']' '/' '[' 'else'  y ']' ']'")
+    : ewh_scope.
+
   Section shift.
     Context (offset : positive).
     Fixpoint shift {t1 t2} (C : expr_with_hole t1 t2) : expr_with_hole t1 t2 :=
@@ -2053,24 +2068,22 @@ Section Language.
 
   Section interaction.
     Context (tlist : type -> type)
-            (cnil : forall t eta, interp_type (tlist t) eta)
             (fcons : forall t, func (t * tlist t) (tlist t)).
-    Global Arguments cnil {_} _.
     Global Arguments fcons {_}.
     Context
       {i o s}
       (init : expr (tlist o * s))
       (step : expr_with_hole (i*s) (o*s)).
-    Fixpoint interaction1 (n : nat) {struct n} : expr (tlist o * s)
+    Fixpoint interaction (n : nat) {struct n} : expr (tlist o * s)
       := match n with
          | O => init
          | S n' =>
-           let outs'_s' := interaction1 n' in
-           let outs' := ffst@outs'_s' in
-           let s' := fsnd@outs'_s' in
+           let outs'_s' := interaction n' in
+             let outs' := ffst@outs'_s' in
+             let s' := fsnd@outs'_s' in
            let o_s := fill_alpha step (!@outs', s') in
            (fcons@(ffst@o_s, outs'), fsnd@o_s)
-         end.
+         end%expr.
   End interaction.
 
   Ltac build_context x e :=
@@ -2165,7 +2178,7 @@ Section Language.
         auth_safe' sk s l ->
         (* It's okay if the key was leaked at the time we got the message,
            just not the signature; hence no "auth_safe" for m. *)
-        let ve := verify@(vkeygen@(skeygen@$sk), m, s) in
+        let ve := (verify@(vkeygen@(skeygen@$sk), m, s))%expr in
         whp (ve -> expr_in m l).
 
     Definition auth_safe (sk : positive)
@@ -2178,7 +2191,7 @@ Section Language.
              (l : list (expr tmessage))
              (m : expr tmessage),
         auth_safe sk s l ->
-        let ve := verify@(vkeygen@(skeygen@$sk), m, s) in
+        let ve := (verify@(vkeygen@(skeygen@$sk), m, s))%expr in
         whp (ve -> expr_in m l).
 
     Lemma expr_in_eq {t} (m x : expr t) l :
@@ -2322,7 +2335,7 @@ Section Language.
           {t e} {C : expr_with_hole _ t} (Hhandler : eqwhp e (fill_hole C m))
           {choice0 choices} (_ : auth_safe sk _ tag (cons choice0 choices ))
           {err : expr t}
-      : let ve := verify@(vkeygen@(skeygen@($sk)), m, tag) in
+      : let ve := (verify@(vkeygen@(skeygen@($sk)), m, tag))%expr in
         eqwhp (eif ve then e else err)
               (eif ve then choice_ctx m C choice0 choices else err).
     Proof.
@@ -2589,7 +2602,7 @@ Section Language.
           let adv_out_2_msg := ffst@adv_out_2 in
           let adv_out_2_sig := fsnd@adv_out_2 in
           let verify_out := sverify@(pK, adv_out_2_msg, adv_out_2_sig) in
-          verify_out -> adv_out_2_msg == adv_out_msg).
+          verify_out -> adv_out_2_msg == adv_out_msg)%expr.
     Proof.
       repeat match goal with
       | |- whp #vtrue => exact whp_true
@@ -2599,7 +2612,7 @@ Section Language.
       | _ => rewrite (rewrite_verify signature_correct) by (solve_eq_fill_hole_r || solve_auth_safe)
       | |- context[(encrypt@(ekeygen@($?sk), ?nonce, ?msg1))%expr] =>
         progress ( (* speedup: instead of progress, just check that msg2 and msg1 are not syntactically equal *)
-            let msg2 := constr:(skey2message@(skeygen@($ irrelevant))) in
+            let msg2 := constr:((skey2message@(skeygen@($ irrelevant)))%expr) in
             rewrite (fill_confidentiality confidentiality sk nonce msg1 msg2) by
                 (solve_eq_fill_hole_r ||
                  solve_encrypt_safe ||
@@ -2609,4 +2622,123 @@ Section Language.
       end.
     Qed.
   End ExampleProtocol1.
+
+  Section ExampleLikePGP.
+    Context {tmessage tsignature tskey tpkey : type}
+            {eq_len : (tmessage * tmessage -> tbool)%etype}.
+
+    Context {skeygen : (trand -> tskey)%etype} (* secret key generation  *)
+            {pkeygen : (tskey -> tpkey)%etype} (* public part of key *)
+            {sign : (tskey * tmessage -> tsignature)%etype}
+            {sverify : (tpkey * tmessage * tsignature -> tbool)%etype}
+            {signature_correct :
+               @auth_conclusion tmessage tsignature tskey tpkey tpkey
+                                skeygen pkeygen pkeygen sign sverify}.
+
+    Context {tkey tnonce : type}
+            {ekeygen : (trand -> tkey)%etype}
+            {encrypt : (tkey * tnonce * tmessage -> tmessage)%etype}
+            {decrypt : (tkey * tnonce * tmessage -> tmessage)%etype}
+            (decrypt_encrypt : forall k n m,
+                eqwhp (decrypt@(ekeygen@($k), n, encrypt@(ekeygen@($k), n, m))) m)
+            {confidentiality :
+               @confidentiality_conclusion tmessage eq_len
+                                           tkey tnonce ekeygen encrypt}.
+    Local Notation signature_safe' :=
+      (@auth_safe' tmessage tsignature tskey tpkey tpkey skeygen pkeygen pkeygen sign sverify).
+
+    Context (tlist : type -> type)
+            (cnil : forall t eta, interp_type (tlist t) eta)
+            (fcons : forall t, func (t * tlist t) (tlist t)).
+    Local Arguments cnil {_} _.
+    Local Arguments fcons {_}.
+
+    Context {tunit : type}
+            {unit_f : forall {t}, (t -> tunit)%etype}
+            {serialize_encrypt_pubkey : (tunit -> tmessage)%etype}.
+    Global Arguments unit_f {_}.
+
+    Definition input : type := tbool * tmessage.
+    Definition output : type := (tpkey * tunit(*FIXME: encryption pkey*) * tsignature) * tmessage.
+    Definition state : type := tskey * tlist tkey.
+
+    Let sk_sign := 1%positive. (* TODO: generalize? *)
+
+    Definition init : expr (tlist output * state) :=
+      (
+        let sk := skeygen@($sk_sign) in
+        let pk := pkeygen@sk in
+        (fcons@((pk, #!, #!, #!, #cnil)), (sk, #cnil))
+      )%expr.
+
+    Definition step : expr_with_hole (input * state) (output * state) :=
+      (
+        let i_s := ewh_hole in
+        let i := ffst@i_s in
+        let s := fsnd@i_s in
+        let sk_sign := ffst@s in
+        let enc_keys := fsnd@s in
+        eif ffst@i
+        then
+          let sk_encrypt := ekeygen@($1) in
+          let pk_encrypt := unit_f@sk_encrypt in (* FIXME: generate pubkey *)
+          let vouch := sign@(sk_sign, serialize_encrypt_pubkey@(pk_encrypt)) in
+          ((#!, pk_encrypt, vouch, #!), (sk_sign, fcons@(sk_encrypt, enc_keys)))
+        else
+          (#!, s)
+      )%ewh.
+
+    Context (ffst_pair : forall t1 t2 (e1 : expr t1) (e2 : expr t2),
+                eqwhp (ffst@(e1, e2)) e1).
+    Context (fsnd_pair : forall t1 t2 (e1 : expr t1) (e2 : expr t2),
+                eqwhp (fsnd@(e1, e2)) e2).
+
+    Example example_PGP_signature_safe : (forall n,
+        let e := interaction tlist (@fcons) init step n in
+        let outputs := ffst@(e) in
+        eqwhp (ffst@(fsnd@e)) (skeygen@($sk_sign)) /\
+        exists outputs' l,
+          and (eqwhp outputs outputs')
+              (signature_safe' sk_sign outputs' l))%expr.
+    Proof.
+      induction n.
+      { cbn; cbv [init]. 
+        repeat (setoid_rewrite ffst_pair || setoid_rewrite fsnd_pair).
+        split.
+        { reflexivity. }
+        { eexists.
+          eexists; split; [reflexivity|].
+          typeclasses eauto with auth_safe'. } }
+      {
+        cbn [interaction].
+        generalize dependent (interaction tlist (@fcons) init step n); intro e; intros.
+        destruct IHn as [Hstate [e' [l' [He' Hl']]]].
+        repeat (setoid_rewrite ffst_pair || setoid_rewrite fsnd_pair || cbv [step fill_alpha ewh_alpha_away_from shift fill_hole]).
+        match goal with
+        | |- context[PositiveSet.fold Pos.max ?e ?i] =>
+          set (PositiveSet.fold Pos.max e i) as m;
+            assert ((m + 1)%positive <> sk_sign);
+            [subst m|generalize dependent m; intro m; intros]
+        end.
+        { apply Pos.add_no_neutral. (* hack for sk_sign <> m+1 *) }
+
+        (* IfMorph *)
+        unshelve (repeat match goal with
+          |- context [(?app@(eif ?b then ?t else ?f))%expr]
+          => let br := constr:((eif b then t else f)%expr) in
+             let rhs := open_constr:(fill_hole (app@ewh_hole) br) in
+             erewrite (_ : (app@_)%expr = rhs) by
+               (cbn [fill_hole]; rewrite ?fill_without_holes; reflexivity);
+               setoid_rewrite fill_if_comm;
+               cbn [fill_hole]; rewrite ?fill_without_holes
+        end); [reflexivity..|].
+
+        repeat (setoid_rewrite ffst_pair || setoid_rewrite fsnd_pair || setoid_rewrite if_same || setoid_rewrite Hstate || setoid_rewrite He').
+
+        split; [reflexivity|].
+        eexists. eexists.
+        split; [reflexivity|].
+        typeclasses eauto with auth_safe'. }
+    Qed.
+  End ExampleLikePGP.
 End Language.

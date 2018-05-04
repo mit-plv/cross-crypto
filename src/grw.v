@@ -97,6 +97,189 @@ Module option_monad.
 End option_monad.
 Notation option_monad := option_monad.option_monad.
 
+Ltac is_sort x :=
+  lazymatch x with
+  | Type => idtac
+  | Set => idtac
+  | Prop => idtac
+  | _ => fail 0 "not a sort"
+  end.
+
+Ltac is_convertible_to_a_type e :=
+  let __ := open_constr:(_ : e) in
+  idtac.
+
+Goal False.
+  is_convertible_to_a_type Set.
+  is_convertible_to_a_type Prop.
+  is_convertible_to_a_type Type.
+  is_convertible_to_a_type nat.
+  is_convertible_to_a_type False.
+  is_convertible_to_a_type (let x := True in False).
+  is_convertible_to_a_type ((fun x => x) False).
+  is_convertible_to_a_type (forall (x:unit), nat).
+  is_convertible_to_a_type (forall (x:unit), x = x).
+  Fail is_convertible_to_a_type O.
+  Fail is_convertible_to_a_type (@nil nat).
+  Fail is_convertible_to_a_type (Set, Set).
+Abort.
+
+Ltac appears_in x l :=
+  lazymatch l with
+  | nil => fail
+  | cons x _ => idtac
+  | cons _ ?tl => appears_in x tl
+  end.
+
+Ltac add_to_set x l :=
+  match constr:(Set) with
+  | _ => let __ := appears_in x l in l
+  | _ =>
+    let T := match type of x with ?T => T end in
+    constr:(@List.cons T x l)
+  end.
+
+Ltac list_union l1 l2 :=
+  lazymatch l1 with
+  | nil => l2
+  | @cons ?T ?x ?l1' =>
+    let x := (* preserve types after matching, COQBUG(7425 *)
+        match type of x with
+        | T => x
+        | _ => constr:((x : T))
+        end in
+    let l2 := add_to_set x l2 in
+    list_union l1' l2
+  end.
+
+Goal False.
+  let l1 := constr:(cons 1 (cons 2 nil)) in
+  let l2 := constr:(cons 2 (cons 3 nil)) in
+  let l3 := list_union l1 l2 in
+  constr_eq l3 (cons 1 (cons 2 (cons 3 nil))).
+
+  let l1 := constr:(cons nat (cons unit nil)) in
+  let l2 := constr:(cons bool (cons unit nil)) in
+  let l3 := list_union l1 l2 in
+  constr_eq l3 (nat :: bool :: unit :: nil)%list.
+  
+  let l1 := constr:(cons (list nat) (cons unit nil)) in
+  let l2 := constr:(cons bool (cons unit nil)) in
+  let l3 := list_union l1 l2 in
+  constr_eq l3 (list nat :: bool :: unit :: nil)%list.
+
+  let l1 := constr:(@cons Type (nat:Type) (@nil Type)) in
+  let l2 := constr:(@cons Type (unit:Type) (@nil Type)) in
+  let l := list_union l1 l2 in
+  constr_eq l (((nat : Type) :: (unit : Type) :: nil)%list).
+Abort.
+
+(** Reification *)
+Section WithMonad.
+  Context (M : monad).
+  Let m := monad.m M.
+  Let ret {T} := @monad.ret M T.
+  Let bind {A B} := @monad.bind M A B.
+  Reserved Notation "A <- X ; B" (at level 70, X at next level, right associativity, format "'[v' A  <-  X ; '/' B ']'").
+  Local Notation    "A <- X ; B" := (bind X (fun A => B)).
+  
+
+  Ltac types_in e :=
+    (* FIXME: exclude function types *)
+    let T := match type of e with ?T => constr:((T : Type)) end in
+    match e with
+    | _ => let __ := is_convertible_to_a_type e in constr:(@nil Type)
+    | _ => lazymatch e with
+           | ?f ?x =>
+             let tix := types_in x in
+             let tif := types_in f in
+             let tir := list_union tif tix in
+             let ti := add_to_set T tir in ti
+           | _ => constr:(@cons Type T (@nil Type))
+           end
+    end.
+  Goal False.
+    let e := nat in
+    let tie := types_in e in
+    constr_eq tie (@nil Type).
+
+    let e := constr:(O) in
+    let tie := types_in e in
+    constr_eq tie ((nat:Type) :: nil)%list.
+
+    let e := constr:(S O) in
+    let tie := types_in e in
+    idtac tie.
+
+    let e := constr:(tt) in
+    let tie := types_in e in
+    constr_eq tie ((unit : Type) :: nil)%list.
+
+    let e := constr:(@pair unit unit tt tt) in
+    let tie := types_in e in
+    idtac tie.
+
+    let e := constr:(@pair unit nat tt O) in
+    let tie := types_in e in
+    idtac tie.
+
+    let e := constr:(@pair unit unit tt tt) in
+    let tie := types_in e in
+    idtac tie.
+
+    let t := constr:((nat : Type)) in
+    let T := match type of t with ?T => T end in
+        pose T.
+
+    let e := constr:((tt, O)) in
+    let tie := types_in e in
+    idtac tie.
+
+    let e := constr:((S O + S O, tt)) in
+    let tie := types_in e in
+    idtac tie.
+
+    (*
+    let e := constr:((1+2, tt, ((1,2)::(0,0)::nil))%list) in
+    let tie := types_in e in
+    pose tie.
+     *)
+
+    Abort.
+
+  Context
+    {TK} {K : TK}
+    {TB} {B : TK -> m TB}
+    {TA} {A : TK -> m TA}
+    {TX} {X : TB -> TB -> m TX}
+    {TC} {C : TK -> TA -> TB -> TB -> TX -> m TC}
+    {TD} {D : TK -> TA -> TC -> m TD}.
+
+  Context {TG}
+          {F : TK -> TG}
+          {G : TG -> TK}.
+  Goal forall (a : TA) (c : TC), False.
+    intros.
+    let e := constr:(
+               k <- ret (G (F K));
+               D k a c) in
+    idtac e.
+  Abort.
+
+  Goal False.
+    let e := constr:(
+               k <- ret K;
+               b <- B k;
+               b'<- B k;
+               a <- A k;
+               x <- X b b';
+               c <- C k a b b' x;
+               D k a c) in
+    idtac e.
+  Abort.
+End WithMonad.
+
+
 
 (*
 

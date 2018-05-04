@@ -2157,7 +2157,7 @@ Section Language.
     | asauth m l : auth_safe' sk m l ->
                    auth_safe' sk (auth@(skeygen@$sk, m)) (m :: l)
     | asverify m t : auth_safe' sk (verify@(vkeygen@(skeygen@$sk), m, t)) nil
-    | aspkey : auth_safe' sk (pkeygen@(skeygen@$sk)) nil (* fixme *)
+    | aspkey : auth_safe' sk (pkeygen@(skeygen@$sk)) nil
     | asrand_neq (i : positive) : i <> sk -> auth_safe' sk ($i) nil
     (* boring recursion: *)
     | asconst t v : @auth_safe' sk t #v nil
@@ -2366,16 +2366,19 @@ Section Language.
   Section Encrypt.
     Context {tmessage : type}
             {eq_len : (tmessage * tmessage -> tbool)%etype}
-            {tkey tnonce : type}
-            {keygen : (trand -> tkey)%etype}
-            {encrypt : (tkey * tnonce * tmessage -> tmessage)%etype}.
+            {tskey tekey tpkey tnonce : type}
+            {skeygen : (trand -> tskey)%etype} (* secret decryption key *)
+            {ekeygen : (tskey -> tekey)%etype} (* encryption key *)
+            {pkeygen : (tskey -> tpkey)%etype} (* public key *)
+            {encrypt : (tekey * tnonce * tmessage -> tmessage)%etype}.
 
     (* The secret key is used only as the input to encrypt *)
     Inductive encrypt_safe (sk : positive) : forall {t}, expr t -> Prop :=
     | esencrypt n m :
         encrypt_safe sk n ->
         encrypt_safe sk m -> (* No key cycles *)
-        encrypt_safe sk (encrypt@(keygen@($sk), n, m))
+        encrypt_safe sk (encrypt@(ekeygen@(skeygen@$sk), n, m))
+    | espkey : encrypt_safe sk (pkeygen@(skeygen@$sk))
     | esrand_neq (i:positive) : i <> sk -> encrypt_safe sk ($i)
     (* boring recursion: *)
     | esconst t v : @encrypt_safe sk t #v
@@ -2390,7 +2393,7 @@ Section Language.
        secret key sk under nonce n somewhere in an expression. *)
     Inductive encrypts (sk : positive)
               (n : expr tnonce) (m : expr tmessage) : forall {t}, expr t -> Prop :=
-    | encs_encrypt : encrypts sk n m (encrypt@(keygen@($sk), n, m))
+    | encs_encrypt : encrypts sk n m (encrypt@(ekeygen@(skeygen@$sk), n, m))
     (* boring recursion: *)
     | encs_func {t1 t2} (f : func t1 t2) e : encrypts sk n m e -> encrypts sk n m (f@e)
     | encs_adv  {t1 t2} (e : expr t1) : encrypts sk n m e -> encrypts sk n m (!t2@e)
@@ -2412,8 +2415,8 @@ Section Language.
     | eqe_encrypt n m m' :
         whp (eq_len@(m, m')) ->
         eq_mod_enc sk
-                   (encrypt@(keygen@($sk), n, m ))
-                   (encrypt@(keygen@($sk), n, m'))
+                   (encrypt@(ekeygen@(skeygen@$sk), n, m ))
+                   (encrypt@(ekeygen@(skeygen@$sk), n, m'))
     (* boring recursion: *)
     | eqe_func {t1 t2} (f : func t1 t2) e e' : eq_mod_enc sk e e' -> eq_mod_enc sk (f@e) (f@e')
     | eqe_adv {t1 t2} (e e' : expr t1) : eq_mod_enc sk e e' -> eq_mod_enc sk (!t2@e) (!t2@e')
@@ -2437,8 +2440,8 @@ Section Language.
           (eh : expr_with_hole tmessage t) :
       whp (eq_len@(msg1, msg2)) ->
       eq_mod_enc sk
-                 (fill_hole eh (encrypt@(keygen@($sk), nonce, msg1)))
-                 (fill_hole eh (encrypt@(keygen@($sk), nonce, msg2))).
+                 (fill_hole eh (encrypt@(ekeygen@(skeygen@$sk), nonce, msg1)))
+                 (fill_hole eh (encrypt@(ekeygen@(skeygen@$sk), nonce, msg2))).
     Proof.
       intros; induction eh; cbn [fill_hole]; econstructor; eauto.
     Qed.
@@ -2449,8 +2452,8 @@ Section Language.
           (eh : expr_with_hole tmessage t) e1 :
       encrypt_safe sk e1 ->
       no_nonce_reuse sk e1 ->
-      e1 = fill_hole eh (encrypt@(keygen@($sk), nonce, msg1)) ->
-      let e2 := fill_hole eh (encrypt@(keygen@($sk), nonce, msg2)) in
+      e1 = fill_hole eh (encrypt@(ekeygen@(skeygen@$sk), nonce, msg1)) ->
+      let e2 := fill_hole eh (encrypt@(ekeygen@(skeygen@$sk), nonce, msg2)) in
       whp (eq_len@(msg1, msg2)) ->
       encrypt_safe sk e2 ->
       no_nonce_reuse sk e2 ->
@@ -2481,7 +2484,7 @@ Section Language.
     end.
 
   Ltac solve_neq_from_NoDup :=
-    match goal with
+    lazymatch goal with
     | H : NoDup ?l |- ?x <> ?y
       =>
       let i := indexof x l in
@@ -2538,26 +2541,35 @@ Section Language.
                @auth_conclusion tmessage tsignature tskey tpkey tpkey
                                 skeygen pkeygen pkeygen sign sverify}.
 
-    Context {tmac tmkey tunit : type}
-            {mkeygen : (trand -> tmkey)%etype}
-            {idmkey : (tmkey -> tmkey)%etype}
+    Context {tunit : type}
+            {id_f : forall {t}, (t -> t)%etype}
             {unit_f : forall {t}, (t -> tunit)%etype}
+            {id_refl : forall {t} (x : expr t), eqwhp (id_f@x)%expr x}.
+
+    Arguments id_f {t}.
+    Arguments unit_f {t}.
+
+    Context {tmac tmkey : type}
+            {mkeygen : (trand -> tmkey)%etype}
             {mac : (tmkey * tmessage -> tmac)%etype}
             {mverify : (tmkey * tmessage * tmac -> tbool)%etype}
             {mac_correct :
                @auth_conclusion tmessage tmac tmkey tmkey tunit
-                                mkeygen idmkey unit_f mac mverify}.
+                                mkeygen id_f unit_f mac mverify}.
 
     Context {tkey tnonce : type}
             {ekeygen : (trand -> tkey)%etype}
             {encrypt : (tkey * tnonce * tmessage -> tmessage)%etype}
             {decrypt : (tkey * tnonce * tmessage -> tmessage)%etype}
             (decrypt_encrypt : forall k n m,
-                eqwhp (decrypt@(ekeygen@($k), n, encrypt@(ekeygen@($k), n, m))) m)
+                eqwhp (decrypt@(ekeygen@($k), n, encrypt@(id_f@(ekeygen@($k)), n, m))) m)
             {confidentiality :
                @confidentiality_conclusion tmessage eq_len
-                                           tkey tnonce ekeygen encrypt}.
+                                           tkey tkey tunit tnonce
+                                           ekeygen id_f unit_f
+                                           encrypt}.
 
+    (* todo assume tmessage encodings for all types? *)
     Context {skey2message : (tskey -> tmessage)%etype}
             {message2skey : (tmessage -> tskey)%etype}
             (message2skey_skey2message : forall k,
@@ -2572,14 +2584,14 @@ Section Language.
             (nodup : NoDup (skn1 :: skn2 :: Kn :: irrelevant :: nil)%list).
 
     Example auth_from_conf
-      (ignoring_nonce_reuse : forall a b c d e f g h, @no_nonce_reuse a b c d e f g h) :
+      (ignoring_nonce_reuse : forall a b c d e f g h i j, @no_nonce_reuse a b c d e f g h i j) :
       whp (
           let sk1 := ekeygen@($skn1) in
           let sk2 := mkeygen@($skn2) in
           let sK := skeygen@($Kn) in
           let msK := skey2message@sK in
           let pK := pkeygen@sK in
-          let enc_out := encrypt@(sk1, #N, msK) in
+          let enc_out := encrypt@(id_f@sk1, #N, msK) in
           let mac_out := mac@(sk2, enc_out) in
           let net_in_1 := (pK, (enc_out, mac_out))%expr in
 
@@ -2587,7 +2599,7 @@ Section Language.
           let adv_out_enc := ffst@(ffst@adv_out_1) in
           let adv_out_mac := fsnd@(ffst@adv_out_1) in
           let adv_out_msg := fsnd@adv_out_1 in
-          let check_out := mverify@(idmkey@sk2, adv_out_enc, adv_out_mac) in
+          let check_out := mverify@(id_f@sk2, adv_out_enc, adv_out_mac) in
           let dec_out := decrypt@(sk1, #N, adv_out_enc) in
           let dec_msg := dec_out in
           let sK' := message2skey@dec_msg in
@@ -2610,13 +2622,13 @@ Section Language.
       | _ => progress rewrite ?decrypt_encrypt, ?message2skey_skey2message, ?impl_if, ?if_same, ?feqb_refl
       | _ => rewrite (rewrite_verify mac_correct)       by (solve_eq_fill_hole_r || solve_auth_safe)
       | _ => rewrite (rewrite_verify signature_correct) by (solve_eq_fill_hole_r || solve_auth_safe)
-      | |- context[(encrypt@(ekeygen@($?sk), ?nonce, ?msg1))%expr] =>
+      | |- context[(encrypt@(id_f@(ekeygen@($?sk)), ?nonce, ?msg1))%expr] =>
         progress ( (* speedup: instead of progress, just check that msg2 and msg1 are not syntactically equal *)
             let msg2 := constr:((skey2message@(skeygen@($ irrelevant)))%expr) in
             rewrite (fill_confidentiality confidentiality sk nonce msg1 msg2) by
                 (solve_eq_fill_hole_r ||
                  solve_encrypt_safe ||
-                 exact (ignoring_nonce_reuse _ _ _ _ _ _ _ _) (* FIXME: reformulate no_nonce_reuse *) ||
+                 exact (ignoring_nonce_reuse _ _ _ _ _ _ _ _ _ _) (* FIXME: reformulate no_nonce_reuse *) ||
                  exact (eq_len_skey2message_skeygen _ _));
             cbv [fill_hole refine_hole without_holes choice_ctx])
       end.
@@ -2635,15 +2647,17 @@ Section Language.
                @auth_conclusion tmessage tsignature tskey tpkey tpkey
                                 skeygen pkeygen pkeygen sign sverify}.
 
-    Context {tkey tnonce : type}
+    Context {tkey tepkey tnonce : type}
             {ekeygen : (trand -> tkey)%etype}
-            {encrypt : (tkey * tnonce * tmessage -> tmessage)%etype}
+            {epkeygen : (tkey -> tepkey)%etype}
+            {encrypt : (tepkey * tnonce * tmessage -> tmessage)%etype}
             {decrypt : (tkey * tnonce * tmessage -> tmessage)%etype}
             (decrypt_encrypt : forall k n m,
-                eqwhp (decrypt@(ekeygen@($k), n, encrypt@(ekeygen@($k), n, m))) m)
+                eqwhp (decrypt@(ekeygen@($k), n, encrypt@(epkeygen@(ekeygen@($k)), n, m))) m)
             {confidentiality :
                @confidentiality_conclusion tmessage eq_len
-                                           tkey tnonce ekeygen encrypt}.
+                                           tkey tepkey tepkey tnonce
+                                           ekeygen epkeygen epkeygen encrypt}.
     Local Notation signature_safe' :=
       (@auth_safe' tmessage tsignature tskey tpkey tpkey skeygen pkeygen pkeygen sign sverify).
 
@@ -2655,11 +2669,11 @@ Section Language.
 
     Context {tunit : type}
             {unit_f : forall {t}, (t -> tunit)%etype}
-            {serialize_encrypt_pubkey : (tunit -> tmessage)%etype}.
+            {serialize_encrypt_pubkey : (tepkey -> tmessage)%etype}.
     Global Arguments unit_f {_}.
 
     Definition input : type := tbool * tmessage.
-    Definition output : type := (tpkey * tunit(*FIXME: encryption pkey*) * tsignature) * tmessage.
+    Definition output : type := (tpkey * tepkey * tsignature) * tmessage.
     Definition state : type := tskey * tlist tkey.
 
     Let sk_sign := 1%positive. (* TODO: generalize? *)
@@ -2681,7 +2695,7 @@ Section Language.
         eif ffst@i
         then
           let sk_encrypt := ekeygen@($1) in
-          let pk_encrypt := unit_f@sk_encrypt in (* FIXME: generate pubkey *)
+          let pk_encrypt := epkeygen@sk_encrypt in
           let vouch := sign@(sk_sign, serialize_encrypt_pubkey@(pk_encrypt)) in
           ((#!, pk_encrypt, vouch, #!), (sk_sign, fcons@(sk_encrypt, enc_keys)))
         else

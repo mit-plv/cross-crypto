@@ -2743,12 +2743,15 @@ Section Language.
           eqwhp outputs outputs' /\
           signature_safe' sk_sign outputs' l /\
           forall m, List.In m l ->
-            exists ske, eqwhp m (serialize_encrypt_pubkey@(epkeygen@(ekeygen@($ske)))) /\
-                        encrypt_safe ske outputs'
+                    exists ske, m = (serialize_encrypt_pubkey@(epkeygen@(ekeygen@($ske))))%expr /\
+                                (ske <= PositiveSet.fold Pos.max (randomness_indices outputs) 1)%positive /\
+                                exists outputs'',
+                                  eqwhp outputs' outputs'' /\
+                                  encrypt_safe ske outputs''
     .
     Proof.
       induction n.
-      { cbn; cbv [init]. 
+      { cbn; cbv [init].
         repeat (setoid_rewrite ffst_pair || setoid_rewrite fsnd_pair).
         split.
         { reflexivity. }
@@ -2770,6 +2773,10 @@ Section Language.
         end.
         destruct IHn as [Hstate [e' [l' [He' [Hl' Hms]]]]].
 
+        match goal with
+        | |- context[randomness_indices ?e] =>
+          set (M2 := randomness_indices e)
+        end.
         repeat (setoid_rewrite ffst_pair || setoid_rewrite fsnd_pair
                 || setoid_rewrite if_same || setoid_rewrite app_if
                 || setoid_rewrite Hstate || setoid_rewrite He').
@@ -2778,7 +2785,7 @@ Section Language.
         eexists. eexists.
         split; [reflexivity|].
         split; [typeclasses eauto with auth_safe'|].
-        
+
         intros m.
 
         Local Opaque app.
@@ -2797,23 +2804,29 @@ Section Language.
         {
           subst m.
           eexists; split; [reflexivity|].
+          split; [admit|]. (* M + 1 <= M2 *)
+          setoid_rewrite <- He'.
+          eexists; split; [reflexivity|].
           repeat (constructor).
           2,3,4,5,6,7,8,9:
             (* sk_sign <> (M + 1)%positive *)
             (* (M + 2)%positive <> (M + 1)%positive *)
             admit.
-          (* Language.encrypt_safe (M + 1) e' *)
+          (* Language.encrypt_safe (M + 1) e *)
           admit.
         }
         {
-          destruct (Hms _ Hm) as [ske [Hske1 Hske2]].
+          destruct (Hms _ Hm) as [ske [Hske1 [Hske3 [e'' [He'' Hske2]]]]].
           eexists; split; [eassumption|].
+          split; [admit|]. (* ske <= M2 *)
+          setoid_rewrite He''.
+          eexists; split; [reflexivity|].
           repeat constructor; try solve_encrypt_safe.
           admit. (* (M + 1)%positive <> ske *)
           admit. (* sk_sign <> ske *)
           admit. (* (M + 1)%positive <> ske *)
           admit. (* sk_sign <> ske *)
-          admit. (* (M + 1)%positive <> ske *)
+          admit. (* (M + 2)%positive <> ske *)
         }
       }
     Admitted.

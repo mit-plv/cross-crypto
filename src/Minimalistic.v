@@ -2475,8 +2475,7 @@ Section Language.
                           whp (x1 == x2 -> y1 == y2).
 
     Definition whp_function {t1 t2} (l : list (expr t1 * expr t2)) : Prop :=
-      forall x1 y1 x2 y2, In (x1, y1) l -> In (x2, y2) l ->
-                          whp (x1 == x2 -> y1 == y2).
+      whp_compatible l l.
 
     Ltac external_change e e' :=
       let H := fresh in
@@ -2534,8 +2533,6 @@ Section Language.
     | ewn_encrypt n m l1 l2 :
         es_with_nonces sk n l1 ->
         es_with_nonces sk m l2 -> (* No key cycles *)
-        whp_compatible l1 l2 ->
-        whp_compatible ((n, m) :: nil) (l1 ++ l2) ->
         es_with_nonces sk (encrypt@(keygen@$sk, n, m)) ((n, m) :: l1 ++ l2)
     | ewn_rand_neq (i:positive) : i <> sk -> es_with_nonces sk ($i) nil
     (* boring recursion: *)
@@ -2547,24 +2544,12 @@ Section Language.
     | ewn_pair {t1 t2} (e1: expr t1) (e2: expr t2) l1 l2 :
         es_with_nonces sk e1 l1 ->
         es_with_nonces sk e2 l2 ->
-        whp_compatible l1 l2 ->
         es_with_nonces sk (e1, e2) (l1 ++ l2).
 
     Lemma ewn_encrypt_safe sk {t} (e : expr t) l :
       es_with_nonces sk e l -> encrypt_safe sk e.
     Proof.
       induction 1; econstructor; eauto.
-    Qed.
-
-    Lemma ewn_function sk {t} (e : expr t) l :
-      es_with_nonces sk e l -> whp_function l.
-    Proof.
-      induction 1;
-        try match goal with
-            | |- context[(?x :: ?y ++ ?z)%list] =>
-              change (x :: y ++ z)%list with ((x :: nil) ++ (y ++ z))
-            end;
-        eauto using nil_fn, singleton_fn, compatible_app.
     Qed.
 
     Ltac use_eq_dec_inj :=
@@ -2707,14 +2692,13 @@ Section Language.
     Qed.
 
     Lemma ewn_reuse sk {t} (e : expr t) l :
-      es_with_nonces sk e l -> no_nonce_reuse sk e.
+      es_with_nonces sk e l -> whp_function l -> no_nonce_reuse sk e.
     Proof.
-      cbv [no_nonce_reuse]; intros;
-        eapply ewn_function; eauto using ewn_reuse'.
+      cbv [no_nonce_reuse]; eauto using ewn_reuse'.
     Qed.
 
     Definition ewn_safe sk {t} (e : expr t) :=
-      exists l, es_with_nonces sk e l.
+      exists l, es_with_nonces sk e l /\ whp_function l.
 
     Lemma fill_eq_mod_enc sk nonce msg1 msg2 {t}
           (eh : expr_with_hole tmessage t) :
@@ -2734,7 +2718,7 @@ Section Language.
       ewn_safe sk e2 ->
       e1 ≈ e2.
     Proof.
-      intros (?&?) ? (?&?).
+      intros (?&?&?) ? (?&?&?).
       eauto 6 using conf, ewn_encrypt_safe, ewn_reuse.
     Qed.
 
@@ -2823,35 +2807,87 @@ Section Language.
     | In _ ?l =>
       match l with
       | nil => solve [destruct H]
-      | cons _ _ => let H' := fresh in destruct H as [? | H']; [|destruct_In H']
+      | cons _ _ => let H' := fresh in destruct H as [H' | H'];
+                                       [try match type of H' with
+                                            | _ = ?a => subst a
+                                            end
+                                       |
+                                       destruct_In H']
       | _ => fail
       end
     end.
 
-  (* TODO This works but is rather slow.
-     We could do better by deduplicating the lists at every point.
-     The resulting proof term is also huge.
-     Admit instead of actually using this tactic for now. *)
   Ltac solve_whp_compatible :=
+    lazymatch goal with
+    | |- whp_function _ => cbv [whp_function]
+    | |- whp_compatible => idtac
+    end;
     let H1 := fresh in
     let H2 := fresh in
     intros ???? H1 H2;
     cbn [app] in H1, H2;
     destruct_In H1; destruct_In H2;
-    repeat match goal with
+    repeat lazymatch goal with
            | H : (_, _) = (_, _) |- _ => inversion_clear H
            | |- whp (?x1 == ?x2 -> ?y1 == ?y2) =>
-             match y1 with
+             lazymatch y1 with
              | y2 => apply whp_contract; fold_eqwhp; reflexivity
              | _ => idtac "todo: handle case where nonces are different"
              end
            end.
+
+  Ltac dedup_cons x l :=
+    lazymatch type of l with
+    | list ?T =>
+      let rec dedup_cons' x l' acc :=
+          lazymatch l' with
+          | nil => constr:(cons x acc)
+          | cons ?y ?l' =>
+            lazymatch y with
+            | x => constr:(l)
+            | _ => dedup_cons' x l' (cons y acc)
+            end
+          end
+      in dedup_cons' x l (@nil T)
+    end.
+
+  Ltac dedup l :=
+    lazymatch type of l with
+    | list ?T =>
+      let rec dedup' l acc :=
+          lazymatch l with
+          | nil => acc
+          | cons ?x ?l => dedup' l ltac:(dedup_cons x acc)
+          end
+      in dedup' l (@nil T)
+    end.
+
+  Lemma whp_function_weaken {t1 t2} (l l' : list (expr t1 * expr t2)) :
+    (forall x, In x l -> In x l') ->
+    whp_function l' ->
+    whp_function l.
+  Admitted.
+
+  Ltac dedup_whp_function :=
+    lazymatch goal with
+      |- whp_function ?l =>
+      let k := dedup l in
+      eapply (whp_function_weaken _ k);
+      [
+        let H := fresh in
+        intros ? H;
+        destruct_In H;
+        solve [econstructor; eauto]
+       |]
+    end.
+
   Ltac solve_ewn :=
     repeat lazymatch goal with
-           | |- ewn_safe _ _ => eexists; solve_ewn
+           | |- ewn_safe _ _ => eexists; split
            | |- es_with_nonces _ _ _ => econstructor
            | |- _ <> _ => solve_neq_from_NoDup
-           | |- whp_compatible _ _ => admit (* solve_whp_compatible *)
+           | |- whp_function _ =>
+             cbv [app]; dedup_whp_function; solve_whp_compatible
            end.
 
   Section ExampleProtocol1.
@@ -2956,7 +2992,7 @@ Section Language.
                    exact (eq_len_skey2message_skeygen _ _));
             cbv [fill_hole refine_hole without_holes choice_ctx])
       end.
-    Admitted.
+    Qed.
   End ExampleProtocol1.
 
   (* FIXME

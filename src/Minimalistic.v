@@ -2994,37 +2994,23 @@ Section Language.
     Qed.
   End ExampleProtocol1.
 
-  (* FIXME
-     Our previous version of public-key encryption doesn't work,
-     so the PGP example doesn't build since I removed it. *)
-
-  Section ExampleLikePGP.
-    Context {tmessage tsignature tskey tpkey : type}
+  Section ExampleConfidentiality.
+    Context {tmessage : type}
             {eq_len : (tmessage * tmessage -> tbool)%etype}.
 
-    Context {skeygen : (trand -> tskey)%etype} (* secret key generation  *)
-            {pkeygen : (tskey -> tpkey)%etype} (* public part of key *)
-            {sign : (tskey * tmessage -> tsignature)%etype}
-            {sverify : (tpkey * tmessage * tsignature -> tbool)%etype}
-            {signature_correct :
-               @auth_conclusion tmessage tsignature tskey tpkey tpkey
-                                skeygen pkeygen pkeygen sign sverify}.
-    Local Notation signature_safe' :=
-      (@auth_safe' tmessage tsignature tskey tpkey tpkey skeygen pkeygen pkeygen sign sverify).
-
-    Context {tkey tepkey tnonce : type}
+    Context {tkey tnonce : type}
             {ekeygen : (trand -> tkey)%etype}
             {random_nonce : (trand -> tnonce)%etype}
-            {epkeygen : (tkey -> tepkey)%etype}
-            {encrypt : (tepkey * tnonce * tmessage -> tmessage)%etype}
+            {encrypt : (tkey * tnonce * tmessage -> tmessage)%etype}
             {decrypt : (tkey * tnonce * tmessage -> tmessage)%etype}
             (decrypt_encrypt : forall k n m,
-                eqwhp (decrypt@(ekeygen@($k), n, encrypt@(epkeygen@(ekeygen@($k)), n, m))) m)
+                eqwhp (decrypt@(ekeygen@($k), n, encrypt@(ekeygen@($k), n, m))) m)
             {confidentiality :
                @confidentiality_conclusion tmessage eq_len
-                                           tkey tepkey tepkey tnonce
-                                           ekeygen epkeygen epkeygen encrypt}.
-    Local Notation encrypt_safe := (fun k => @encrypt_safe tmessage tkey tepkey tepkey tnonce ekeygen epkeygen epkeygen encrypt k _).
+                                           tkey tnonce
+                                           ekeygen encrypt}.
+
+    Local Notation es_with_nonces := (fun k => @es_with_nonces tmessage tkey tnonce ekeygen encrypt k _).
 
     Context (tlist : type -> type)
             (cnil : forall t eta, interp_type (tlist t) eta)
@@ -3032,44 +3018,26 @@ Section Language.
     Local Arguments cnil {_} _.
     Local Arguments fcons {_}.
 
-    Context {serialize_encrypt_pubkey : (tepkey -> tmessage)%etype}.
+    Context {tunit : type}
+            {unit_f : forall {t}, (t -> tunit)%etype}.
 
-    Definition input : type := tbool * ((tepkey * tsignature) * tmessage).
-    Definition output : type := (tpkey * tepkey * tsignature) * tmessage.
-    Definition state : type := tskey * tlist tkey.
+    Arguments unit_f {t}.
 
-    Let sk_sign := 1%positive. (* TODO: generalize? *)
+    Definition input : type := tmessage.
+    Definition output : type := tmessage.
+    Definition state : type := tkey.
+
+    Let K := 1%positive.
 
     Definition init : expr (tlist output * state) :=
-      (
-        let sk := skeygen@($sk_sign) in
-        let pk := pkeygen@sk in
-        (fcons@((pk, #!, #!, #!, #cnil)), (sk, #cnil))
-      )%expr.
+      (#cnil, ekeygen@($K))%expr.
 
     Definition step : expr_with_hole (input * state) (output * state) :=
       (
         let i_s := ewh_hole in
-        let i := ffst@i_s in
-        let s := fsnd@i_s in
-        let sk_sign := ffst@s in
-        let enc_keys := fsnd@s in
-        eif ffst@i
-        then
-          let sk_encrypt := ekeygen@($1) in
-          let pk_encrypt := epkeygen@sk_encrypt in
-          let vouch := sign@(sk_sign, serialize_encrypt_pubkey@(pk_encrypt)) in
-          ((#!, pk_encrypt, vouch, #!), (sk_sign, fcons@(sk_encrypt, enc_keys)))
-        else
-          let signed_pke_msg := fsnd@i in
-          let signed_pke := ffst@signed_pke_msg in
-          let msg := fsnd@signed_pke_msg in
-          let pke := ffst@signed_pke in
-          let sig := fsnd@signed_pke in
-          eif (sverify@(pkeygen@sk_sign, serialize_encrypt_pubkey@pke, sig))
-          then ((#!, #!, #!, encrypt@(pke, random_nonce@($2), msg)), s)
-          else
-          (#!, s)
+        let msg := ffst@i_s in
+        let key := fsnd@i_s in
+        (encrypt@(key, random_nonce@($1), msg), key)
       )%ewh.
 
     Context (ffst_pair : forall t1 t2 (e1 : expr t1) (e2 : expr t2),
@@ -3077,31 +3045,31 @@ Section Language.
     Context (fsnd_pair : forall t1 t2 (e1 : expr t1) (e2 : expr t2),
                 eqwhp (fsnd@(e1, e2)) e2).
 
-    Example example_PGP_signature_safe n :
+    Example example_confidentiality n :
         let e := interaction tlist (@fcons) init step n in
         let outputs := (ffst@(e))%expr in
-        eqwhp (ffst@(fsnd@e)) (skeygen@($sk_sign)) /\
+        eqwhp (fsnd@e) (ekeygen@($K)) /\
         exists outputs' l,
           eqwhp outputs outputs' /\
-          signature_safe' sk_sign outputs' l /\
-          forall m, List.In m l ->
-                    exists ske, m = (serialize_encrypt_pubkey@(epkeygen@(ekeygen@($ske))))%expr /\
-                                (ske <= PositiveSet.fold Pos.max (randomness_indices outputs) 1)%positive /\
-                                exists outputs'',
-                                  eqwhp outputs' outputs'' /\
-                                  encrypt_safe ske outputs''
+          es_with_nonces K outputs' l /\
+          whp_function l /\
+          forall n m, List.In (n, m) l ->
+                      exists nonce_index,
+                        n = (random_nonce@($nonce_index))%expr /\
+                        (nonce_index <= PositiveSet.fold Pos.max (randomness_indices outputs) 1)%positive (* l is old *)
     .
     Proof.
       induction n.
       { cbn; cbv [init].
         repeat (setoid_rewrite ffst_pair || setoid_rewrite fsnd_pair).
         split.
-        { reflexivity. }
-        { eexists.
-          eexists; split; [reflexivity|].
-          split.
-          { typeclasses eauto with auth_safe'. }
-          { destruct 1. } } }
+        - reflexivity.
+        - eexists; eexists; split; [reflexivity|].
+          split; [|split].
+          + solve_ewn.
+          + solve_ewn.
+          + intros ?? H.
+            destruct H. }
       {
         cbn [interaction].
         generalize dependent (interaction tlist (@fcons) init step n); intro e; intros.
@@ -3109,11 +3077,10 @@ Section Language.
         match goal with
         | |- context[PositiveSet.fold Pos.max ?e ?i] =>
           set (PositiveSet.fold Pos.max e i) as M;
-            assert ((M + 1)%positive <> sk_sign)
-                   by (subst M; apply Pos.add_no_neutral);
-            assert ((M + 2)%positive <> sk_sign) by admit
+            assert ((M + 1)%positive <> K)
+                   by (subst M; apply Pos.add_no_neutral)
         end.
-        destruct IHn as [Hstate [e' [l' [He' [Hl' Hms]]]]].
+        destruct IHn as (Hstate & e' & l' & He' & Hewn & Hl' & Hnms).
 
         match goal with
         | |- context[randomness_indices ?e] =>
@@ -3126,51 +3093,33 @@ Section Language.
         split; [reflexivity|].
         eexists. eexists.
         split; [reflexivity|].
-        split; [typeclasses eauto with auth_safe'|].
+        split; [solve_ewn; eauto|].
+        split.
+        { admit. } (* follows with some difficulty from Hnms and M, using oldness reasoning *)
+        { intros n' m'.
 
-        intros m.
+          Local Opaque app.
+          repeat (setoid_rewrite or_False_l || setoid_rewrite or_False_r
+                  || setoid_rewrite or_refl || setoid_rewrite or_assoc
+                  || setoid_rewrite app_nil_l || setoid_rewrite app_nil_r
+                  || setoid_rewrite in_app_iff).
+          Local Transparent app.
 
-        Local Opaque app.
-        repeat (setoid_rewrite or_False_l || setoid_rewrite or_False_r
-                || setoid_rewrite or_refl || setoid_rewrite or_assoc
-                || setoid_rewrite app_nil_l || setoid_rewrite app_nil_r
-                || setoid_rewrite in_app_iff).
-        setoid_rewrite or_comm.
-        repeat (setoid_rewrite or_False_l || setoid_rewrite or_False_r
-                || setoid_rewrite or_refl || setoid_rewrite or_assoc
-                || setoid_rewrite app_nil_l || setoid_rewrite app_nil_r
-                || setoid_rewrite in_app_iff).
-        Local Transparent app.
-
-        intros Hm; destruct Hm as [Hm|Hm].
-        {
-          subst m.
-          eexists; split; [reflexivity|].
-          split; [admit|]. (* M + 1 <= M2 *)
-          setoid_rewrite <- He'.
-          eexists; split; [reflexivity|].
-          repeat (constructor).
-          2,3,4,5,6,7,8,9:
-            (* sk_sign <> (M + 1)%positive *)
-            (* (M + 2)%positive <> (M + 1)%positive *)
-            admit.
-          (* Language.encrypt_safe (M + 1) e *)
-          admit.
-        }
-        {
-          destruct (Hms _ Hm) as [ske [Hske1 [Hske3 [e'' [He'' Hske2]]]]].
-          eexists; split; [eassumption|].
-          split; [admit|]. (* ske <= M2 *)
-          setoid_rewrite He''.
-          eexists; split; [reflexivity|].
-          repeat constructor; try solve_encrypt_safe.
-          admit. (* (M + 1)%positive <> ske *)
-          admit. (* sk_sign <> ske *)
-          admit. (* (M + 1)%positive <> ske *)
-          admit. (* sk_sign <> ske *)
-          admit. (* (M + 2)%positive <> ske *)
+          intros Hnm; destruct Hnm as [Hnm|Hnm].
+          {
+            inversion Hnm.
+            subst n' m'.
+            eexists; split; [reflexivity|].
+            admit. (* M + 1 <= M2 *)
+          }
+          {
+            change (In (n', m') l') in Hnm.
+            edestruct (Hnms _ _ Hnm) as (ni & Hn' & Hni).
+            eexists; split; eauto.
+            admit. (* M <= M2 *)
+          }
         }
       }
     Admitted.
-  End ExampleLikePGP.
+  End ExampleConfidentiality.
 End Language.

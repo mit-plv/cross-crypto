@@ -4,6 +4,9 @@ Require Import Coq.MSets.MSetPositive Coq.FSets.FMapPositive.
 Require Import FCF.FCF FCF.Asymptotic FCF.EqDec.
 Require Import CrossCrypto.Util CrossCrypto.RatUtil CrossCrypto.RewriteUtil CrossCrypto.MapUtil.
 Require Import Lia. (* TODO: remove after removing not_negligible_const *)
+Require Import Coq.Init.Wf.
+Require Import Coq.Relations.Relations.
+Require Import Coq.Wellfounded.Transitive_Closure.
 
 Require Import Coq.btauto.Btauto.
 Lemma eqb_bool a b : (a ?= b) = negb (xorb a b).
@@ -240,15 +243,15 @@ Section Language.
         rewrite add_generate_randomness with
             (s0:=PositiveSet.union s (PositiveSet.remove new_elt idxs2))
             (s'0:=PositiveSet.union s' idxs2) (x:=new_elt).
-        Focus 2. {
+        2: {
           cbv [PositiveSetProperties.Add]; intros.
           rewrite (union_remove s' idxs2 new_elt).
           eapply PositiveSetProperties.union_Add.
-          assumption. } Unfocus.
-        Focus 2. {
+          assumption. }
+        2: {
           rewrite !PositiveSet.union_spec, PositiveSet.remove_spec.
           assert (new_elt = new_elt) by reflexivity.
-          tauto. } Unfocus.
+          tauto. }
 
         setoid_rewrite update_add.
         f_equiv; cbv [pointwise_relation]; intros.
@@ -1717,22 +1720,22 @@ Section Language.
                         case_eq x; intros end.
         {
           etransitivity.
-          Focus 2. {
+          2: {
             apply Proper_Bind_generate_randomness.
             intros.
             rewrite find_update_in
               by (apply PositiveMapProperties.F.in_find_iff; congruence).
-            eapply reflexivity. } Unfocus.
+            eapply reflexivity. }
           rewrite Bind_unused.
           rewrite H0; reflexivity. }
         {
           etransitivity.
-          Focus 2. {
+          2: {
             apply Proper_Bind_generate_randomness.
             intros.
             rewrite find_update_not_in
               by (apply PositiveMapProperties.F.not_find_in_iff; congruence).
-            eapply reflexivity. } Unfocus.
+            eapply reflexivity. }
 
           remember (fun m => ret (match m with | Some r => r | None => cast_rand eta (Bvector_exists eta) end)) as G.
           transitivity (Bind (generate_randomness eta univ)
@@ -2595,7 +2598,6 @@ Section Language.
     Definition expr_lt_1_sigT '(existT _ t1 e1 : sigT expr) '(existT _ t2 e2)
       := expr_lt_1 e1 e2.
 
-    Require Import Coq.Init.Wf.
     Lemma expr_lt_1_wf : well_founded expr_lt_1_sigT.
     Proof.
       intros [? e2].
@@ -2603,9 +2605,6 @@ Section Language.
         eapply invert_expr_lt_1 in Hlt; inversion_sigma; subst;
           eauto; destruct Hlt; inversion_sigma; subst; eauto.
     Qed.
-
-    Require Import Coq.Relations.Relations.
-    Require Import Coq.Wellfounded.Transitive_Closure.
 
     Definition expr_lt_sigT := clos_trans _ expr_lt_1_sigT.
     Lemma expr_lt_wf : well_founded expr_lt_sigT.
@@ -2866,7 +2865,7 @@ Section Language.
     (forall x, In x l -> In x l') ->
     whp_function l' ->
     whp_function l.
-  Admitted.
+  Proof. cbv [whp_function whp_compatible]; eauto. Qed.
 
   Ltac dedup_whp_function :=
     lazymatch goal with

@@ -2635,7 +2635,7 @@ Section Language.
       es_with_nonces sk e l -> encrypts sk n m e -> In (n, m) l.
     Proof.
       revert t e.
-      cut (forall te : { t & expr t },
+      cut (forall te : { t : _ & expr t },
               let (t, e) := te in
               es_with_nonces sk e l -> encrypts sk n m e -> In (n, m) l).
       {

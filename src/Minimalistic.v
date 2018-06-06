@@ -242,13 +242,13 @@ Section Language.
         rewrite add_generate_randomness with (s'0:=s') by eassumption.
         rewrite add_generate_randomness with
             (s0:=PositiveSet.union s (PositiveSet.remove new_elt idxs2))
-            (s'0:=PositiveSet.union s' idxs2) (x:=new_elt).
-        2: {
+            (s'0:=PositiveSet.union s' idxs2) (x:=new_elt); cycle 1.
+        {
           cbv [PositiveSetProperties.Add]; intros.
           rewrite (union_remove s' idxs2 new_elt).
           eapply PositiveSetProperties.union_Add.
           assumption. }
-        2: {
+        {
           rewrite !PositiveSet.union_spec, PositiveSet.remove_spec.
           assert (new_elt = new_elt) by reflexivity.
           tauto. }
@@ -1719,8 +1719,8 @@ Section Language.
         match goal with |- context[match ?x with | _ => _ end] =>
                         case_eq x; intros end.
         {
-          etransitivity.
-          2: {
+          etransitivity; cycle 1.
+          {
             apply Proper_Bind_generate_randomness.
             intros.
             rewrite find_update_in
@@ -1729,8 +1729,8 @@ Section Language.
           rewrite Bind_unused.
           rewrite H0; reflexivity. }
         {
-          etransitivity.
-          2: {
+          etransitivity; cycle 1.
+          {
             apply Proper_Bind_generate_randomness.
             intros.
             rewrite find_update_not_in

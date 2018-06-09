@@ -7,6 +7,7 @@ Require Import Lia. (* TODO: remove after removing not_negligible_const *)
 Require Import Coq.Init.Wf.
 Require Import Coq.Relations.Relations.
 Require Import Coq.Wellfounded.Transitive_Closure.
+Require Import Coq.Wellfounded.Lexicographic_Product.
 
 Require Import Coq.btauto.Btauto.
 Lemma eqb_bool a b : (a ?= b) = negb (xorb a b).
@@ -67,9 +68,20 @@ Section Language.
 
   Context (ffst : forall t1 t2, (t1 * t2 -> t1)%etype)
           (fsnd : forall t1 t2, (t1 * t2 -> t2)%etype)
-          (cast_rand : forall eta, Bvector eta -> interp_type trand eta).
+          (tlist : type -> type)
+          (cnil : forall t eta, interp_type (tlist t) eta)
+          (fcons : forall t, func (t * tlist t) (tlist t))
+          (tunit : type)
+          (unit_f : forall {t}, (t -> tunit)%etype)
+          (id_f : forall {t}, (t -> t)%etype).
   Global Arguments ffst {_ _}.
   Global Arguments fsnd {_ _}.
+  Global Arguments cnil {_} _.
+  Global Arguments fcons {_}.
+  Global Arguments id_f {t}.
+  Global Arguments unit_f {t}.
+
+  Context (cast_rand : forall eta, Bvector eta -> interp_type trand eta).
   Section GenerateRandomness.
     Context (eta:nat).
 
@@ -2052,47 +2064,112 @@ Section Language.
        format "'[hv' 'eif'  b  '/' '[' 'then'  x  ']' '/' '[' 'else'  y ']' ']'")
     : ewh_scope.
 
-  Section shift.
-    Context (offset : positive).
-    Fixpoint shift {t1 t2} (C : expr_with_hole t1 t2) : expr_with_hole t1 t2 :=
+
+  (* TODO either fill these in concretely,
+     or allow arbitrary types as randomness indices *)
+  Context (pos_pair : nat * positive -> positive)
+          (pos_pair_inv : positive -> nat * positive)
+          (pos_pair_inv_l : forall x, pos_pair (pos_pair_inv x) = x)
+          (pos_pair_inv_r : forall x, pos_pair_inv (pos_pair x) = x).
+
+  Section renumber.
+    Context (n : nat).
+
+    Fixpoint renumber {t} (e : expr t) : expr t :=
+      match e with
+      | expr_random i => expr_random (pos_pair (n, i))
+      (* recurse *)
+      | expr_const c => expr_const c
+      | expr_adversarial e => expr_adversarial (renumber e)
+      | expr_app f e => expr_app f (renumber e)
+      | expr_pair e1 e2 => expr_pair (renumber e1) (renumber e2)
+      end.
+
+    Fixpoint renumber_h {t1 t2} (C : expr_with_hole t1 t2) : expr_with_hole t1 t2 :=
       match C with
+      | ewh_random i => ewh_random (pos_pair (n, i))
+      (* recurse *)
       | ewh_const c => ewh_const c
-      | ewh_random i => ewh_random (Pos.add offset i)
-      | ewh_adversarial e => ewh_adversarial (shift e)
-      | ewh_app f e => ewh_app f (shift e)
-      | ewh_pair e1 e2 => ewh_pair (shift e1) (shift e2)
+      | ewh_adversarial e => ewh_adversarial (renumber_h e)
+      | ewh_app f e => ewh_app f (renumber_h e)
+      | ewh_pair e1 e2 => ewh_pair (renumber_h e1) (renumber_h e2)
       | ewh_hole => ewh_hole
       end.
-  End shift.
+  End renumber.
 
-  Definition ewh_alpha_away_from (idxs : PositiveSet.t) {t1 t2} (C:expr_with_hole t1 t2)
-    : expr_with_hole t1 t2 :=
-    let offset := PositiveSet.fold Pos.max idxs xH in
-    shift offset C.
-
-  Definition fill_alpha {t1 t2} (C:expr_with_hole t1 t2) (e:expr t1) : expr t2 :=
-    let C' := ewh_alpha_away_from (randomness_indices e) C in
-    fill_hole C' e.
+  Definition fill_alpha {t1 t2} n (C:expr_with_hole t1 t2) (e:expr t1) : expr t2 :=
+    fill_hole (renumber_h n C) e.
 
   Section interaction.
-    Context (tlist : type -> type)
-            (fcons : forall t, func (t * tlist t) (tlist t)).
-    Global Arguments fcons {_}.
     Context
       {i o s}
       (init : expr (tlist o * s))
       (step : expr_with_hole (i*s) (o*s)).
     Fixpoint interaction (n : nat) {struct n} : expr (tlist o * s)
       := match n with
-         | O => init
+         | O => renumber 0%nat init
          | S n' =>
            let outs'_s' := interaction n' in
              let outs' := ffst@outs'_s' in
              let s' := fsnd@outs'_s' in
-           let o_s := fill_alpha step (!@outs', s') in
+           let o_s := fill_alpha n step (!@outs', s') in
            (fcons@(ffst@o_s, outs'), fsnd@o_s)
          end%expr.
   End interaction.
+
+  Section Old.
+    Context (n : nat).
+
+    Definition index_old i :=
+      let '(n', _) := pos_pair_inv i in
+      (n' <= n)%nat.
+
+    Fixpoint expr_old {t} (e : expr t) :=
+      match e with
+      | $i => index_old i
+      (* recurse *)
+      | #_ => True
+      | _@e => expr_old e
+      | !@e => expr_old e
+      | (e1, e2) => (expr_old e1 /\ expr_old e2)%type
+      end%expr.
+  End Old.
+
+  Lemma renumber_old {t} n (e : expr t) :
+    expr_old n (renumber n e).
+    induction e; cbn [renumber expr_old]; eauto.
+    cbv [index_old]; rewrite pos_pair_inv_r; eauto.
+  Qed.
+
+  Lemma fill_alpha_old {t1 t2} n (C : expr_with_hole t1 t2) e :
+    expr_old n e ->
+    expr_old n (fill_alpha n C e).
+  Proof.
+    revert e.
+    induction C; intros e H;
+      cbn [fill_alpha fill_hole renumber_h expr_old]; eauto.
+    cbv [index_old]; rewrite pos_pair_inv_r; eauto.
+  Qed.
+
+  Lemma old_s {t} n (e : expr t) :
+    expr_old n e -> expr_old (S n) e.
+  Proof.
+    induction e; eauto; cbn [expr_old].
+    - cbv [index_old].
+      destruct (pos_pair_inv _).
+      eauto.
+    - intuition idtac.
+  Qed.
+
+  Lemma interaction_old {i o s} init step n :
+    expr_old n (@interaction i o s init step n).
+  Proof.
+    intros; induction n; cbn [interaction]; eauto;
+    repeat (progress (cbn [expr_old]) ||
+            split ||
+            eapply fill_alpha_old ||
+            solve [eauto using old_s, renumber_old]).
+  Qed.
 
   Ltac build_context x e :=
     match type of x with
@@ -2901,14 +2978,6 @@ Section Language.
                @auth_conclusion tmessage tsignature tskey tpkey tpkey
                                 skeygen pkeygen pkeygen sign sverify}.
 
-    Context {tunit : type}
-            {id_f : forall {t}, (t -> t)%etype}
-            {unit_f : forall {t}, (t -> tunit)%etype}
-            {id_refl : forall {t} (x : expr t), eqwhp (id_f@x)%expr x}.
-
-    Arguments id_f {t}.
-    Arguments unit_f {t}.
-
     Context {tmac tmkey : type}
             {mkeygen : (trand -> tmkey)%etype}
             {mac : (tmkey * tmessage -> tmac)%etype}
@@ -3012,22 +3081,12 @@ Section Language.
 
     Local Notation es_with_nonces := (fun k => @es_with_nonces tmessage tkey tnonce ekeygen encrypt k _).
 
-    Context (tlist : type -> type)
-            (cnil : forall t eta, interp_type (tlist t) eta)
-            (fcons : forall t, func (t * tlist t) (tlist t)).
-    Local Arguments cnil {_} _.
-    Local Arguments fcons {_}.
-
-    Context {tunit : type}
-            {unit_f : forall {t}, (t -> tunit)%etype}.
-
-    Arguments unit_f {t}.
-
     Definition input : type := tmessage.
     Definition output : type := tmessage.
     Definition state : type := tkey.
 
     Let K := 1%positive.
+    Let rK := pos_pair (0%nat, K)%core.
 
     Definition init : expr (tlist output * state) :=
       (#cnil, ekeygen@($K))%expr.
@@ -3046,17 +3105,17 @@ Section Language.
                 eqwhp (fsnd@(e1, e2)) e2).
 
     Example example_confidentiality n :
-        let e := interaction tlist (@fcons) init step n in
+        let e := interaction init step n in
         let outputs := (ffst@(e))%expr in
-        eqwhp (fsnd@e) (ekeygen@($K)) /\
+        eqwhp (fsnd@e) (ekeygen@($rK)) /\
         exists outputs' l,
           eqwhp outputs outputs' /\
-          es_with_nonces K outputs' l /\
+          es_with_nonces rK outputs' l /\
           whp_function l /\
-          forall n m, List.In (n, m) l ->
-                      exists nonce_index,
-                        n = (random_nonce@($nonce_index))%expr /\
-                        (nonce_index <= PositiveSet.fold Pos.max (randomness_indices outputs) 1)%positive (* l is old *)
+          forall nce msg, List.In (nce, msg) l ->
+                      exists i,
+                        nce = (random_nonce@($i))%expr /\
+                        expr_old n nce
     .
     Proof.
       induction n.
@@ -3072,20 +3131,10 @@ Section Language.
             destruct H. }
       {
         cbn [interaction].
-        generalize dependent (interaction tlist (@fcons) init step n); intro e; intros.
-        cbv [step fill_alpha ewh_alpha_away_from shift fill_hole].
-        match goal with
-        | |- context[PositiveSet.fold Pos.max ?e ?i] =>
-          set (PositiveSet.fold Pos.max e i) as M;
-            assert ((M + 1)%positive <> K)
-                   by (subst M; apply Pos.add_no_neutral)
-        end.
+        generalize dependent (interaction init step n); intro e; intros.
+        cbv [step fill_alpha renumber fill_hole].
         destruct IHn as (Hstate & e' & l' & He' & Hewn & Hl' & Hnms).
 
-        match goal with
-        | |- context[randomness_indices ?e] =>
-          set (M2 := randomness_indices e)
-        end.
         repeat (setoid_rewrite ffst_pair || setoid_rewrite fsnd_pair
                 || setoid_rewrite if_same || setoid_rewrite app_if
                 || setoid_rewrite Hstate || setoid_rewrite He').
@@ -3094,8 +3143,10 @@ Section Language.
         eexists. eexists.
         split; [reflexivity|].
         split; [solve_ewn; eauto|].
+        { cbv [rK].
+          admit. } (* follows by oldness *)
         split.
-        { admit. } (* follows with some difficulty from Hnms and M, using oldness reasoning *)
+        { admit. } (* follows by oldness *)
         { intros n' m'.
 
           Local Opaque app.
@@ -3110,13 +3161,12 @@ Section Language.
             inversion Hnm.
             subst n' m'.
             eexists; split; [reflexivity|].
-            admit. (* M + 1 <= M2 *)
+            cbv [expr_old index_old]; rewrite pos_pair_inv_r; eauto.
           }
           {
             change (In (n', m') l') in Hnm.
             edestruct (Hnms _ _ Hnm) as (ni & Hn' & Hni).
-            eexists; split; eauto.
-            admit. (* M <= M2 *)
+            eexists; split; eauto using old_s.
           }
         }
       }

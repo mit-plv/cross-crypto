@@ -1557,21 +1557,13 @@ Section Language.
     Qed.
   End WHPCorollaries.
 
-  Ltac contract_trans_whp :=
-    repeat
-      match goal with
-      | H0 : whp (?a -> ?b) |- _ =>
-        match goal with
-        | H1 : whp (b -> ?c) |- _ =>
-          assert (whp (a -> c)) by
-              (eapply (whp_impl_trans _ _ _ H0 H1));
-          clear H0; clear H1
-        | H1 : whp (a -> b -> ?c) |- _ =>
-          assert (whp (a -> c)) by
-              (eapply (whp_mp_cond _ _ _ H0 H1));
-          clear H0; clear H1
-        end
-      end.
+  Ltac compose_impl :=
+    lazymatch goal with
+    | H : whp (?a -> ?b) |- whp (?a -> ?c) =>
+      apply (whp_impl_trans a b c); [exact H|]
+    | H : whp (?b -> ?c) |- whp (?a -> ?c) =>
+      apply (whp_impl_trans a b c); [|exact H]
+    end.
 
   Section Equality.
     Definition eqwhp {t} (e1 e2:expr t) : Prop := whp (e1 == e2).
@@ -1682,6 +1674,15 @@ Section Language.
 
   Lemma feqb_refl {t} (x : expr t) : eqwhp (x == x) #vtrue.
   Proof. unpack_whp; rewrite eqb_refl; btauto. Qed.
+
+  Ltac echange t :=
+    refine (_ : t).
+
+  Ltac echangein t H :=
+    let H' := fresh in
+    refine ((fun H' : t => _) H);
+    clear H;
+    rename H' into H.
 
   Ltac fold_eqwhp :=
     repeat match goal with
@@ -1816,6 +1817,9 @@ Section Language.
     trivial using negligible_0.
   Qed.
 
+  Lemma inequal_rand x y : x <> y -> whp (~ ($x) == ($y)).
+  Admitted.
+
   Definition independent {T} {U} (x : expr T) (y : expr U) :=
     PositiveSet.eq (PositiveSet.inter (randomness_indices x) (randomness_indices y))
                    PositiveSet.empty.
@@ -1857,6 +1861,9 @@ Section Language.
     setoid_rewrite ratDistance_comm in H; setoid_rewrite ratDistance_from_0 in H.
     eapply not_negligible_const; eauto using rat1_ne_rat0.
   Qed.
+
+  Close Scope rat_scope.
+  Close Scope vector_scope.
 
   Section MoreLemmas.
     Lemma if_same b t (e:expr t) : eqwhp (eif b then e else e) e.
@@ -1919,10 +1926,10 @@ Section Language.
 
     Lemma whp_explosion e : whp (#vfalse -> e).
     Proof. unpack_whp. btauto. Qed.
-  End MoreLemmas.
 
-  Close Scope rat_scope.
-  Close Scope vector_scope.
+    Lemma not_impl_false x : eqwhp (~x) (x -> #vfalse).
+    Proof. cbv [eqwhp]; unpack_whp; btauto. Qed.
+  End MoreLemmas.
 
   Definition expr_in {t} (x : expr t) : list (expr t) -> expr tbool :=
     (fold_right (fun m acc => x == m \/ acc)%expr #vfalse)%expr.
@@ -2005,9 +2012,9 @@ Section Language.
     Proof.
       cbv [eqwhp].
       rewrite <-whp_impl_eq.
-      assert (whp (a -> a == #vtrue)) by (unpack_whp; btauto).
-      pose proof (@fill_eqwhp_internal tbool _ a #vtrue C).
-      contract_trans_whp; eauto.
+      apply (whp_impl_trans _ (a == #vtrue)).
+      - unpack_whp; btauto.
+      - apply fill_eqwhp_internal.
     Qed.
 
     Lemma fill_cond_false a (C : expr_with_hole tbool tbool) :
@@ -2015,9 +2022,9 @@ Section Language.
     Proof.
       cbv [eqwhp].
       rewrite <-whp_impl_eq.
-      assert (whp (~a -> a == #vfalse)) by (unpack_whp; btauto).
-      pose proof (@fill_eqwhp_internal tbool _ a #vfalse C).
-      contract_trans_whp; eauto.
+      apply (whp_impl_trans _ (a == #vfalse)).
+      - unpack_whp; btauto.
+      - apply fill_eqwhp_internal.
     Qed.
 
     Fixpoint refine_hole {t1 t2 t3}
@@ -2121,6 +2128,16 @@ Section Language.
               (rewrite fill_without_holes in H) ||
               (rewrite fill_refine_hole in H));
       rewrite H; clear H
+    end.
+
+  Ltac deny_cond :=
+    match goal with
+    | |- whp (?a -> ?b)%expr =>
+      cut (whp (~ a));
+      [solve [apply whp_impl;
+              rewrite_fill_cond_false;
+              apply whp_contract;
+              apply whp_explosion]|]
     end.
 
     Lemma fill_cond_if_true a {t} (e e' : expr t) (C : expr_with_hole _ tbool) :
@@ -2388,8 +2405,8 @@ Section Language.
       cbv [auth'_conclusion auth_conclusion].
       intros Hcon ??? m (? & Hauth_safe' & Hsub).
       specialize (Hcon _ _ _ m Hauth_safe').
-      pose proof (expr_in_extend m _ _ Hsub).
-      contract_trans_whp; eauto.
+      compose_impl.
+      eapply expr_in_extend; eauto.
     Qed.
   End Authenticity.
 
@@ -2527,17 +2544,11 @@ Section Language.
       assert (whp (ve -> fill_hole C m == choice_ctx m C choice0 choices)).
       {
         rewrite choice_ctx_as_fill.
-        assert (whp (ve -> m == choice m choice0 choices)).
-        {
-          assert (whp (ve -> expr_in m (cons choice0 choices)))
-            by eauto using auth_correct.
-          pose proof choice_eq m choice0 choices.
-          contract_trans_whp; eauto.
-        }
-        assert (whp (m == choice m choice0 choices ->
-                     fill_hole C m == fill_hole C (choice m choice0 choices)))
-          by eapply fill_eqwhp_internal.
-        contract_trans_whp; eauto.
+        apply (whp_impl_trans _ (m == choice m choice0 choices)).
+        - apply (whp_impl_trans _ (expr_in m (cons choice0 choices))).
+          + eauto using auth_correct.
+          + apply choice_eq.
+        - apply fill_eqwhp_internal.
       }
       eapply whp_impl.
       - eapply rewrite_condition.
@@ -3136,6 +3147,8 @@ Section Language.
     Context {tkey tnonce : type}
             {ekeygen : (trand -> tkey)%etype}
             {random_nonce : (trand -> tnonce)%etype}
+            {random_nonce_inj : forall x y,
+                whp (random_nonce@x == random_nonce@y -> x == y)}
             {encrypt : (tkey * tnonce * tmessage -> tmessage)%etype}
             {decrypt : (tkey * tnonce * tmessage -> tmessage)%etype}
             (decrypt_encrypt : forall k n m,
@@ -3187,14 +3200,13 @@ Section Language.
       induction n.
       { cbn; cbv [init].
         repeat (setoid_rewrite ffst_pair || setoid_rewrite fsnd_pair).
-        split.
-        - reflexivity.
-        - eexists; eexists; split; [reflexivity|].
-          split; [|split].
-          + solve_ewn.
-          + solve_ewn.
-          + intros ?? H.
-            destruct H. }
+        split; [reflexivity|].
+        eexists; eexists; split; [reflexivity|].
+        split; [|split].
+        - solve_ewn.
+        - solve_ewn.
+        - intros ?? H.
+          destruct H. }
       {
         cbn [interaction].
         generalize dependent (interaction init step n); intro e; intros.
@@ -3206,11 +3218,14 @@ Section Language.
                 || setoid_rewrite Hstate || setoid_rewrite He').
 
         split; [reflexivity|].
-        eexists. eexists.
-        split; [reflexivity|].
+        eexists; eexists; split; [reflexivity|].
         split; [solve_ewn; eauto|].
         { cbv [rK].
-          intros H; apply pos_pair_inj_left in H; congruence. }
+          lazymatch goal with
+            |- pos_pair (_, _) <> pos_pair (_, _) =>
+            let H := fresh in
+            intros H; apply pos_pair_inj_left in H; congruence
+          end. }
         split.
         {
           cbv [whp_function].
@@ -3223,59 +3238,31 @@ Section Language.
           Local Transparent app.
           intros H1 H2.
 
-          Ltac echange t :=
-            refine (_ : t).
-          Ltac echangein t H :=
-            let H' := fresh in
-            refine ((fun H' : t => _) H);
-            clear H;
-            rename H' into H.
-          echangein uconstr:(_ \/ In (x1, y1) l') H1.
-          echangein uconstr:(_ \/ In (x2, y2) l') H2.
+          echangein uconstr:(_ \/ In _ _) H1.
+          echangein uconstr:(_ \/ In _ _) H2.
 
           destruct H1; destruct H2;
-            repeat progress
-                   lazymatch goal with
+            repeat lazymatch goal with
                    | H : (_, _) = (_, _) |- _ => inversion_clear H
-                   | |- whp (?x1 == ?x2 -> ?y1 == ?y2) =>
-                     lazymatch y1 with
-                     | y2 => apply whp_contract; fold_eqwhp; reflexivity
-                     | _ => idtac
-                     end
+                   end;
+            [ apply whp_contract; fold_eqwhp; reflexivity | | |
+              solve [eauto] ];
+            deny_cond;
+            repeat lazymatch goal with
+                   | H : In (?x, ?y) l' |- _ =>
+                     destruct (Hnms _ _ H) as (?&?&?);
+                       clear H;
+                       subst;
+                       cbn [expr_old] in *
+                   | |- whp (~ random_nonce@?x1 == random_nonce@?x2) =>
+                     rewrite not_impl_false;
+                       apply (whp_impl_trans _ (x1 == x2));
+                       [ solve [apply random_nonce_inj]
+                       | rewrite <-not_impl_false;
+                         apply inequal_rand ]
+                   | |- pos_pair _ <> _ => solve [intro; eapply old_different; eauto]
+                   | |- _ <> pos_pair _ => solve [intro; eapply old_different; eauto]
                    end.
-          Ltac deny_cond :=
-            match goal with
-            | |- whp (?a -> ?b)%expr =>
-              cut (whp (~ a));
-              [apply whp_impl;
-               rewrite_fill_cond_false;
-               apply whp_contract;
-               apply whp_explosion|]
-            end.
-          {
-            deny_cond.
-            edestruct Hnms as (?&?&?); eauto.
-            subst.
-            assert (forall x y, whp (random_nonce@x == random_nonce@y -> x == y)) by admit. (* context about random_nonce *)
-            assert (forall x y : positive, x <> y -> whp (~ ($x) == ($y))%expr) by admit. (* probabilistic reasoning *)
-            assert (pos_pair (S n, 1%positive) <> x).
-            { cbn [expr_old] in H1.
-              intro; eapply old_different; eauto. }
-            { (* todo abstract lemma about the safety of random nonces *)
-              set (a := ($(pos_pair (S n, 1%positive)%core))%expr).
-              set (b := ($x)%expr).
-              assert (whp (~(a == b))) by (eapply H2; eauto).
-              assert (forall x, eqwhp (~x) (x -> #vfalse))
-                by (intros; cbv [eqwhp]; unpack_whp; btauto).
-              rewrite H5.
-              rewrite H5 in H4.
-              specialize (H a b).
-              contract_trans_whp.
-              eauto.
-            }
-          }
-          { deny_cond; admit. } (* same as the previous *)
-          { eapply Hl'; eauto. }
         }
         { intros n' m'.
 
@@ -3287,19 +3274,15 @@ Section Language.
           Local Transparent app.
 
           intros Hnm; destruct Hnm as [Hnm|Hnm].
-          {
-            inversion Hnm.
+          { inversion Hnm.
             subst n' m'.
             eexists; split; [reflexivity|].
-            cbv [expr_old index_old]; rewrite pos_pair_inv_r; eauto.
-          }
-          {
-            change (In (n', m') l') in Hnm.
-            edestruct (Hnms _ _ Hnm) as (ni & Hn' & Hni).
-            eexists; split; eauto using old_S.
-          }
+            cbv [expr_old index_old]; rewrite pos_pair_inv_r; eauto. }
+          { echangein uconstr:(In _ _) Hnm.
+            edestruct (Hnms _ _ Hnm) as (?&?&?);
+              eauto using old_S. }
         }
       }
-    Admitted.
+    Qed.
   End ExampleConfidentiality.
 End Language.

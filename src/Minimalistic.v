@@ -3156,9 +3156,12 @@ Section Language.
             {confidentiality :
                @confidentiality_conclusion tmessage eq_len
                                            tkey tnonce
-                                           ekeygen encrypt}.
+                                           ekeygen encrypt}
+            {erase_message : (tmessage -> tmessage)%etype}
+            {erase_message_len : forall m, whp (eq_len@(m, erase_message@m))}.
 
     Local Notation es_with_nonces := (fun k => @es_with_nonces tmessage tkey tnonce ekeygen encrypt k _).
+    Local Notation eq_mod_enc := (fun k => @eq_mod_enc tmessage eq_len tkey tnonce ekeygen encrypt k _).
 
     Definition input : type := tmessage.
     Definition output : type := tmessage.
@@ -3178,111 +3181,218 @@ Section Language.
         (encrypt@(key, random_nonce@($1), msg), key)
       )%ewh.
 
+    Definition step_erase : expr_with_hole (input * state) (output * state) :=
+      (
+        let i_s := ewh_hole in
+        let msg := ffst@i_s in
+        let key := fsnd@i_s in
+        (encrypt@(key, random_nonce@($1), erase_message@msg), key)
+      )%ewh.
+
     Context (ffst_pair : forall t1 t2 (e1 : expr t1) (e2 : expr t2),
                 eqwhp (ffst@(e1, e2)) e1).
     Context (fsnd_pair : forall t1 t2 (e1 : expr t1) (e2 : expr t2),
                 eqwhp (fsnd@(e1, e2)) e2).
 
-    Example example_confidentiality n :
+    Lemma example_confidentiality_safe n :
         let e := interaction init step n in
         let outputs := (ffst@(e))%expr in
+        let e_erase := interaction init step_erase n in
+        let outputs_erase := (ffst@e_erase)%expr in
         eqwhp (fsnd@e) (ekeygen@($rK)) /\
-        exists outputs' l,
+        eqwhp (fsnd@e_erase) (ekeygen@($rK)) /\
+        exists outputs' l outputs_erase' l_erase,
           eqwhp outputs outputs' /\
-          es_with_nonces rK outputs' l /\
-          whp_function l /\
-          forall nce msg, List.In (nce, msg) l ->
-                      exists i,
-                        nce = (random_nonce@($i))%expr /\
-                        expr_old n nce
+          eqwhp outputs_erase outputs_erase' /\
+          (es_with_nonces rK outputs' l /\
+           whp_function l /\
+           forall nce msg, List.In (nce, msg) l ->
+                           exists i,
+                             nce = (random_nonce@($i))%expr /\
+                             expr_old n nce) /\
+          (es_with_nonces rK outputs_erase' l_erase /\
+           whp_function l_erase /\
+           forall nce msg, List.In (nce, msg) l_erase ->
+                           exists i,
+                             nce = (random_nonce@($i))%expr /\
+                             expr_old n nce) /\
+          eq_mod_enc rK outputs' outputs_erase'
     .
     Proof.
       induction n.
       { cbn; cbv [init].
-        repeat (setoid_rewrite ffst_pair || setoid_rewrite fsnd_pair).
-        split; [reflexivity|].
-        eexists; eexists; split; [reflexivity|].
+        let r := repeat (setoid_rewrite ffst_pair || setoid_rewrite fsnd_pair) in
+        split; [|split; [|do 4 eexists; split; [|split]]];
+          [r; reflexivity ..|].
         split; [|split].
-        - solve_ewn.
-        - solve_ewn.
-        - intros ?? H.
-          destruct H. }
+        { split; [|split].
+          - solve_ewn.
+          - solve_ewn.
+          - intros ?? H.
+            destruct H. }
+        { split; [|split].
+          - solve_ewn.
+          - solve_ewn.
+          - intros ?? H.
+            destruct H. }
+        { econstructor. }
+      }
       {
         cbn [interaction].
-        generalize dependent (interaction init step n); intro e; intros.
+        generalize dependent (interaction init step n); intro e.
+        generalize dependent (interaction init step_erase n); intro e_erase.
+        intros.
         cbv [step fill_alpha renumber fill_hole].
-        destruct IHn as (Hstate & e' & l' & He' & Hewn & Hl' & Hnms).
+        destruct IHn as (Hstate & Hstate_erase & e' & l' & e_erase' & l_erase' & He' & He_erase' & (Hewn & Hl' & Hnms) & (Hewn_erase & Hl_erase' & Hnms_erase) & Heme).
 
-        repeat (setoid_rewrite ffst_pair || setoid_rewrite fsnd_pair
-                || setoid_rewrite if_same || setoid_rewrite app_if
-                || setoid_rewrite Hstate || setoid_rewrite He').
-
-        split; [reflexivity|].
-        eexists; eexists; split; [reflexivity|].
-        split; [solve_ewn; eauto|].
-        { cbv [rK].
-          lazymatch goal with
-            |- pos_pair (_, _) <> pos_pair (_, _) =>
-            let H := fresh in
-            intros H; apply pos_pair_inj_left in H; congruence
-          end. }
-        split.
+        let r :=
+            repeat (setoid_rewrite ffst_pair || setoid_rewrite fsnd_pair
+                    || setoid_rewrite if_same || setoid_rewrite app_if
+                    || setoid_rewrite Hstate || setoid_rewrite He'
+                    || setoid_rewrite Hstate_erase || setoid_rewrite He_erase') in
+        split; [|split; [|do 4 eexists; split; [|split]]];
+          [r; reflexivity ..|].
+        split; [|split].
         {
-          cbv [whp_function].
-          intros ????.
-          Local Opaque app.
-          repeat (setoid_rewrite or_False_l || setoid_rewrite or_False_r
-                  || setoid_rewrite or_refl || setoid_rewrite or_assoc
-                  || setoid_rewrite app_nil_l || setoid_rewrite app_nil_r
-                  || setoid_rewrite in_app_iff).
-          Local Transparent app.
-          intros H1 H2.
+          split; [|split].
+          { solve_ewn; eauto.
+            cbv [rK].
+            lazymatch goal with
+              |- pos_pair (_, _) <> pos_pair (_, _) =>
+              let H := fresh in
+              intros H; apply pos_pair_inj_left in H; congruence
+            end. }
+          {
+            cbv [whp_function].
+            intros ????.
+            Local Opaque app.
+            repeat (setoid_rewrite or_False_l || setoid_rewrite or_False_r
+                    || setoid_rewrite or_refl || setoid_rewrite or_assoc
+                    || setoid_rewrite app_nil_l || setoid_rewrite app_nil_r
+                    || setoid_rewrite in_app_iff).
+            Local Transparent app.
+            intros H1 H2.
 
-          echangein uconstr:(_ \/ In _ _) H1.
-          echangein uconstr:(_ \/ In _ _) H2.
+            echangein uconstr:(_ \/ In _ _) H1.
+            echangein uconstr:(_ \/ In _ _) H2.
 
-          destruct H1; destruct H2;
-            repeat lazymatch goal with
-                   | H : (_, _) = (_, _) |- _ => inversion_clear H
-                   end;
-            [ apply whp_contract; fold_eqwhp; reflexivity | | |
-              solve [eauto] ];
-            deny_cond;
-            repeat lazymatch goal with
-                   | H : In (?x, ?y) l' |- _ =>
-                     destruct (Hnms _ _ H) as (?&?&?);
-                       clear H;
-                       subst;
-                       cbn [expr_old] in *
-                   | |- whp (~ random_nonce@?x1 == random_nonce@?x2) =>
-                     rewrite not_impl_false;
-                       apply (whp_impl_trans _ (x1 == x2));
-                       [ solve [apply random_nonce_inj]
-                       | rewrite <-not_impl_false;
-                         apply inequal_rand ]
-                   | |- pos_pair _ <> _ => solve [intro; eapply old_different; eauto]
-                   | |- _ <> pos_pair _ => solve [intro; eapply old_different; eauto]
-                   end.
+            destruct H1; destruct H2;
+              repeat lazymatch goal with
+                     | H : (_, _) = (_, _) |- _ => inversion_clear H
+                     end;
+              [ apply whp_contract; fold_eqwhp; reflexivity | | |
+                solve [eauto] ];
+              deny_cond;
+              repeat lazymatch goal with
+                     | H : In (?x, ?y) l' |- _ =>
+                       destruct (Hnms _ _ H) as (?&?&?);
+                         clear H;
+                         subst;
+                         cbn [expr_old] in *
+                     | |- whp (~ random_nonce@?x1 == random_nonce@?x2) =>
+                       rewrite not_impl_false;
+                         apply (whp_impl_trans _ (x1 == x2));
+                         [ solve [apply random_nonce_inj]
+                         | rewrite <-not_impl_false;
+                           apply inequal_rand ]
+                     | |- pos_pair _ <> _ => solve [intro; eapply old_different; eauto]
+                     | |- _ <> pos_pair _ => solve [intro; eapply old_different; eauto]
+                     end.
+          }
+          { intros n' m'.
+
+            Local Opaque app.
+            repeat (setoid_rewrite or_False_l || setoid_rewrite or_False_r
+                    || setoid_rewrite or_refl || setoid_rewrite or_assoc
+                    || setoid_rewrite app_nil_l || setoid_rewrite app_nil_r
+                    || setoid_rewrite in_app_iff).
+            Local Transparent app.
+
+            intros Hnm; destruct Hnm as [Hnm|Hnm].
+            { inversion Hnm.
+              subst n' m'.
+              eexists; split; [reflexivity|].
+              cbv [expr_old index_old]; rewrite pos_pair_inv_r; eauto. }
+            { echangein uconstr:(In _ _) Hnm.
+              edestruct (Hnms _ _ Hnm) as (?&?&?);
+                eauto using old_S. }
+          }
         }
-        { intros n' m'.
+        { (* very similar proofscript, just put _erase after everything *)
+          split; [|split].
+          { solve_ewn; eauto.
+            cbv [rK].
+            lazymatch goal with
+              |- pos_pair (_, _) <> pos_pair (_, _) =>
+              let H := fresh in
+              intros H; apply pos_pair_inj_left in H; congruence
+            end. }
+          {
+            cbv [whp_function].
+            intros ????.
+            Local Opaque app.
+            repeat (setoid_rewrite or_False_l || setoid_rewrite or_False_r
+                    || setoid_rewrite or_refl || setoid_rewrite or_assoc
+                    || setoid_rewrite app_nil_l || setoid_rewrite app_nil_r
+                    || setoid_rewrite in_app_iff).
+            Local Transparent app.
+            intros H1 H2.
 
-          Local Opaque app.
-          repeat (setoid_rewrite or_False_l || setoid_rewrite or_False_r
-                  || setoid_rewrite or_refl || setoid_rewrite or_assoc
-                  || setoid_rewrite app_nil_l || setoid_rewrite app_nil_r
-                  || setoid_rewrite in_app_iff).
-          Local Transparent app.
+            echangein uconstr:(_ \/ In _ _) H1.
+            echangein uconstr:(_ \/ In _ _) H2.
 
-          intros Hnm; destruct Hnm as [Hnm|Hnm].
-          { inversion Hnm.
-            subst n' m'.
-            eexists; split; [reflexivity|].
-            cbv [expr_old index_old]; rewrite pos_pair_inv_r; eauto. }
-          { echangein uconstr:(In _ _) Hnm.
-            edestruct (Hnms _ _ Hnm) as (?&?&?);
-              eauto using old_S. }
+            destruct H1; destruct H2;
+              repeat lazymatch goal with
+                     | H : (_, _) = (_, _) |- _ => inversion_clear H
+                     end;
+              [ apply whp_contract; fold_eqwhp; reflexivity | | |
+                solve [eauto] ];
+              deny_cond;
+              repeat lazymatch goal with
+                     | H : In (?x, ?y) l_erase' |- _ =>
+                       destruct (Hnms_erase _ _ H) as (?&?&?);
+                         clear H;
+                         subst;
+                         cbn [expr_old] in *
+                     | |- whp (~ random_nonce@?x1 == random_nonce@?x2) =>
+                       rewrite not_impl_false;
+                         apply (whp_impl_trans _ (x1 == x2));
+                         [ solve [apply random_nonce_inj]
+                         | rewrite <-not_impl_false;
+                           apply inequal_rand ]
+                     | |- pos_pair _ <> _ => solve [intro; eapply old_different; eauto]
+                     | |- _ <> pos_pair _ => solve [intro; eapply old_different; eauto]
+                     end.
+          }
+          { intros n' m'.
+
+            Local Opaque app.
+            repeat (setoid_rewrite or_False_l || setoid_rewrite or_False_r
+                    || setoid_rewrite or_refl || setoid_rewrite or_assoc
+                    || setoid_rewrite app_nil_l || setoid_rewrite app_nil_r
+                    || setoid_rewrite in_app_iff).
+            Local Transparent app.
+
+            intros Hnm; destruct Hnm as [Hnm|Hnm].
+            { inversion Hnm.
+              subst n' m'.
+              eexists; split; [reflexivity|].
+              cbv [expr_old index_old]; rewrite pos_pair_inv_r; eauto. }
+            { echangein uconstr:(In _ _) Hnm.
+              edestruct (Hnms_erase _ _ Hnm) as (?&?&?);
+                eauto using old_S. }
+          }
         }
-      }
-    Qed.
+        { econstructor.
+          econstructor.
+          econstructor.
+          (* FIXME unsolvable.
+             We need to know that the adversary doesn't produce two
+             distinguishable messages for e' and e_erase'.
+             Of course, we know that the two are indist.
+             This means that their lengths are indist.
+             I think this is the condition we actually want to impose for
+             eq_mod_enc - that the lengths be indist, not eqwhp. *)
+    Abort.
   End ExampleConfidentiality.
 End Language.

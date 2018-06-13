@@ -1898,10 +1898,6 @@ Section Language.
       eqwhp (a /\ b) (eif a then b else #vfalse).
     Proof. cbv [eqwhp]; unpack_whp. btauto. Qed.
 
-    Lemma if_comm a b c :
-      eqwhp (a -> b -> c) (b -> a -> c).
-    Proof. cbv [eqwhp]; unpack_whp. btauto. Qed.
-
     Lemma whp_split a b : whp (a -> b) -> whp (~a -> b) -> whp b.
     Proof. unpack_whp. btauto. Qed.
 
@@ -1924,6 +1920,9 @@ Section Language.
     Lemma whp_explosion e : whp (#vfalse -> e).
     Proof. unpack_whp. btauto. Qed.
   End MoreLemmas.
+
+  Close Scope rat_scope.
+  Close Scope vector_scope.
 
   Definition expr_in {t} (x : expr t) : list (expr t) -> expr tbool :=
     (fold_right (fun m acc => x == m \/ acc)%expr #vfalse)%expr.
@@ -2001,26 +2000,24 @@ Section Language.
       eapply fill_eqwhp_internal.
     Qed.
 
-    Lemma fill_cond_true a {t} (e e' : expr t) (C : expr_with_hole _ tbool) :
-      eqwhp (a -> fill_hole C (eif a then e else e')) (a -> fill_hole C e).
+    Lemma fill_cond_true a (C : expr_with_hole tbool tbool) :
+      eqwhp (a -> fill_hole C a) (a -> fill_hole C #vtrue).
     Proof.
       cbv [eqwhp].
       rewrite <-whp_impl_eq.
-      assert (whp (a -> (eif a then e else e') == e)) by eapply if_true_internal.
-      pose proof (@fill_eqwhp_internal t _ (eif a then e else e') e C).
-      contract_trans_whp.
-      eauto.
+      assert (whp (a -> a == #vtrue)) by (unpack_whp; btauto).
+      pose proof (@fill_eqwhp_internal tbool _ a #vtrue C).
+      contract_trans_whp; eauto.
     Qed.
 
-    Lemma fill_cond_false a {t} (e e' : expr t) (C : expr_with_hole _ tbool) :
-      eqwhp (~a -> fill_hole C (eif a then e else e')) (~a -> fill_hole C e').
+    Lemma fill_cond_false a (C : expr_with_hole tbool tbool) :
+      eqwhp (~a -> fill_hole C a) (~a -> fill_hole C #vfalse).
     Proof.
       cbv [eqwhp].
       rewrite <-whp_impl_eq.
-      assert (whp (~a -> (eif a then e else e') == e')) by eapply if_false_internal.
-      pose proof (@fill_eqwhp_internal t _ (eif a then e else e') e' C).
-      contract_trans_whp.
-      eauto.
+      assert (whp (~a -> a == #vfalse)) by (unpack_whp; btauto).
+      pose proof (@fill_eqwhp_internal tbool _ a #vfalse C).
+      contract_trans_whp; eauto.
     Qed.
 
     Fixpoint refine_hole {t1 t2 t3}
@@ -2064,6 +2061,113 @@ Section Language.
        format "'[hv' 'eif'  b  '/' '[' 'then'  x  ']' '/' '[' 'else'  y ']' ']'")
     : ewh_scope.
 
+  Ltac build_context x e :=
+    match type of x with
+    | expr ?hole =>
+      match e with
+      | x => uconstr:(@ewh_hole hole)
+      | @expr_const ?t ?c => uconstr:(@ewh_const hole t c)
+      | expr_random ?i => uconstr:(@ewh_random hole i)
+      | @expr_adversarial ?t1 ?t2 ?e => let E := build_context x e in
+                                        uconstr:(@ewh_adversarial hole t1 t2 E)
+      | @expr_app ?t1 ?t2 ?f ?e => let E := build_context x e in
+                                   uconstr:(@ewh_app hole t1 t2 f E)
+      | @expr_pair ?t1 ?t2 ?e1 ?e2 => let E1 := build_context x e1 in
+                                      let E2 := build_context x e2 in
+                                      uconstr:(@ewh_pair hole t1 t2 E1 E2)
+      | fill_hole ?B ?e => let A := build_context x e in
+                           uconstr:(refine_hole A B)
+      | _ => uconstr:(without_holes e)
+      end
+    end.
+
+  Ltac internal_rewrite :=
+    match goal with
+    | |- context[(?e == ?e' -> ?b)%expr] =>
+      let C := build_context e b in
+      let H := fresh in
+      pose proof (rewrite_eqwhp_internal e e' C) as H;
+      cbn [fill_hole refine_hole] in H;
+      repeat ((rewrite fill_without_holes in H) +
+              (rewrite fill_refine_hole in H));
+      rewrite H; clear H
+    end.
+
+  Ltac rewrite_fill_cond_true :=
+    match goal with
+    | |- context[(?a -> ?b)%expr] =>
+      lazymatch b with
+      | context[a] => idtac
+      end;
+      let C := build_context a b in
+      let H := fresh in
+      pose proof (fill_cond_true a C) as H;
+      repeat ((cbn [fill_hole refine_hole] in H) ||
+              (rewrite fill_without_holes in H) ||
+              (rewrite fill_refine_hole in H));
+      rewrite H; clear H
+    end.
+
+  Ltac rewrite_fill_cond_false :=
+    match goal with
+    | |- context[(~ ?a -> ?b)%expr] =>
+      lazymatch b with
+      | context[a] => idtac
+      end;
+      let C := build_context a b in
+      let H := fresh in
+      pose proof (fill_cond_false a C) as H;
+      repeat ((cbn [fill_hole refine_hole] in H) ||
+              (rewrite fill_without_holes in H) ||
+              (rewrite fill_refine_hole in H));
+      rewrite H; clear H
+    end.
+
+    Lemma fill_cond_if_true a {t} (e e' : expr t) (C : expr_with_hole _ tbool) :
+      eqwhp (a -> fill_hole C (eif a then e else e')) (a -> fill_hole C e).
+    Proof.
+      rewrite_fill_cond_true.
+      rewrite if_true.
+      reflexivity.
+    Qed.
+
+    Lemma fill_cond_if_false a {t} (e e' : expr t) (C : expr_with_hole _ tbool) :
+      eqwhp (~a -> fill_hole C (eif a then e else e')) (~a -> fill_hole C e').
+    Proof.
+      rewrite_fill_cond_false.
+      rewrite if_false.
+      reflexivity.
+    Qed.
+
+  Ltac rewrite_fill_cond_if_true :=
+    match goal with
+    | |- context[(?a -> ?d)%expr] =>
+      lazymatch d with
+      | context[(eif a then ?b else ?c)%expr] =>
+        let C := build_context (eif a then b else c)%expr d in
+        let H := fresh in
+        pose proof (fill_cond_if_true a b c C) as H;
+        repeat ((cbn [fill_hole refine_hole] in H) ||
+                (rewrite fill_without_holes in H) ||
+                (rewrite fill_refine_hole in H));
+        rewrite H; clear H
+      end
+    end.
+
+  Ltac rewrite_fill_cond_if_false :=
+    match goal with
+    | |- context[(~ ?a -> ?d)%expr] =>
+      match d with
+      | context[(eif a then ?b else ?c)%expr] =>
+        let C := build_context (eif a then b else c)%expr d in
+        let H := fresh in
+        pose proof (fill_cond_if_false a b c C) as H;
+        repeat ((cbn [fill_hole refine_hole] in H) ||
+                (rewrite fill_without_holes in H) ||
+                (rewrite fill_refine_hole in H));
+        rewrite H; clear H
+      end
+    end.
 
   (* TODO either fill these in concretely,
      or allow arbitrary types as randomness indices *)
@@ -2107,7 +2211,7 @@ Section Language.
       (step : expr_with_hole (i*s) (o*s)).
     Fixpoint interaction (n : nat) {struct n} : expr (tlist o * s)
       := match n with
-         | O => renumber 0%nat init
+         | O => renumber 0 init
          | S n' =>
            let outs'_s' := interaction n' in
              let outs' := ffst@outs'_s' in
@@ -2122,7 +2226,7 @@ Section Language.
 
     Definition index_old i :=
       let '(n', _) := pos_pair_inv i in
-      (n' <= n)%nat.
+      n' <= n.
 
     Fixpoint expr_old {t} (e : expr t) :=
       match e with
@@ -2135,10 +2239,35 @@ Section Language.
       end%expr.
   End Old.
 
+  Lemma pos_pair_old n m x : n <= m -> index_old m (pos_pair (n, x)).
+  Proof.
+    cbv [index_old]; rewrite pos_pair_inv_r.
+    eauto.
+  Qed.
+
+  Lemma pos_pair_old_conv n m x : n > m -> index_old m (pos_pair (n, x)) -> False.
+  Proof.
+    cbv [index_old]; rewrite pos_pair_inv_r.
+    omega.
+  Qed.
+
+  Lemma old_different i n x : index_old n i -> i <> pos_pair (S n, x).
+  Proof.
+    intros ??; subst; eauto using pos_pair_old_conv, gt_Sn_n.
+  Qed.
+
+  Lemma pos_pair_inj_left n m x y : pos_pair (n, x) = pos_pair (m, y) ->
+                                    n = m.
+    intros H.
+    eapply (f_equal pos_pair_inv) in H.
+    repeat rewrite pos_pair_inv_r in H.
+    inversion H.
+    eauto.
+  Qed.
+
   Lemma renumber_old {t} n (e : expr t) :
     expr_old n (renumber n e).
-    induction e; cbn [renumber expr_old]; eauto.
-    cbv [index_old]; rewrite pos_pair_inv_r; eauto.
+    induction e; cbn [renumber expr_old]; eauto using pos_pair_old.
   Qed.
 
   Lemma fill_alpha_old {t1 t2} n (C : expr_with_hole t1 t2) e :
@@ -2147,11 +2276,10 @@ Section Language.
   Proof.
     revert e.
     induction C; intros e H;
-      cbn [fill_alpha fill_hole renumber_h expr_old]; eauto.
-    cbv [index_old]; rewrite pos_pair_inv_r; eauto.
+      cbn [fill_alpha fill_hole renumber_h expr_old]; eauto using pos_pair_old.
   Qed.
 
-  Lemma old_s {t} n (e : expr t) :
+  Lemma old_S {t} n (e : expr t) :
     expr_old n e -> expr_old (S n) e.
   Proof.
     induction e; eauto; cbn [expr_old].
@@ -2168,70 +2296,8 @@ Section Language.
     repeat (progress (cbn [expr_old]) ||
             split ||
             eapply fill_alpha_old ||
-            solve [eauto using old_s, renumber_old]).
+            solve [eauto using old_S, renumber_old]).
   Qed.
-
-  Ltac build_context x e :=
-    match type of x with
-    | expr ?hole =>
-      match e with
-      | x => uconstr:(@ewh_hole hole)
-      | @expr_const ?t ?c => uconstr:(@ewh_const hole t c)
-      | expr_random ?i => uconstr:(@ewh_random hole i)
-      | @expr_adversarial ?t1 ?t2 ?e => let E := build_context x e in
-                                        uconstr:(@ewh_adversarial hole t1 t2 E)
-      | @expr_app ?t1 ?t2 ?f ?e => let E := build_context x e in
-                                   uconstr:(@ewh_app hole t1 t2 f E)
-      | @expr_pair ?t1 ?t2 ?e1 ?e2 => let E1 := build_context x e1 in
-                                      let E2 := build_context x e2 in
-                                      uconstr:(@ewh_pair hole t1 t2 E1 E2)
-      | fill_hole ?B ?e => let A := build_context x e in
-                           uconstr:(refine_hole A B)
-      | _ => uconstr:(without_holes e)
-      end
-    end.
-
-  Ltac internal_rewrite :=
-    match goal with
-    | |- context[(?e == ?e' -> ?b)%expr] =>
-      let C := build_context e b in
-      let H := fresh in
-      pose proof (rewrite_eqwhp_internal e e' C) as H;
-      cbn [fill_hole refine_hole] in H;
-      repeat ((rewrite fill_without_holes in H) +
-              (rewrite fill_refine_hole in H));
-      rewrite H; clear H
-    end.
-
-  Ltac rewrite_fill_cond_true :=
-    match goal with
-    | |- context[(?a -> ?d)%expr] =>
-      match d with
-      | context[(eif ?a then ?b else ?c)%expr] =>
-        let C := build_context (eif a then b else c)%expr d in
-        let H := fresh in
-        pose proof (fill_cond_true a b c C) as H;
-        cbn [fill_hole refine_hole] in H;
-        repeat ((rewrite fill_without_holes in H) +
-                (rewrite fill_refine_hole in H));
-        rewrite H; clear H
-      end
-    end.
-
-  Ltac rewrite_fill_cond_false :=
-    match goal with
-    | |- context[(~ ?a -> ?d)%expr] =>
-      match d with
-      | context[(eif ?a then ?b else ?c)%expr] =>
-        let C := build_context (eif a then b else c)%expr d in
-        let H := fresh in
-        pose proof (fill_cond_false a b c C) as H;
-        cbn [fill_hole refine_hole] in H;
-        repeat ((rewrite fill_without_holes in H) +
-                (rewrite fill_refine_hole in H));
-        rewrite H; clear H
-      end
-    end.
 
   Section Authenticity.
     Context {tmessage ttag tskey tvkey tpkey : type}
@@ -2307,12 +2373,12 @@ Section Language.
       - eapply whp_explosion.
       - cbn [In] in H.
         eapply (whp_split (m == x)).
-        + rewrite if_comm.
+        + rewrite whp_switch_cond.
           eapply whp_contract.
           assert (In x l') by (eapply H; eauto); clear H.
           eapply expr_in_eq; eauto.
         + rewrite or_if.
-          rewrite_fill_cond_false.
+          rewrite_fill_cond_if_false.
           eapply whp_contract.
           eauto.
     Qed.
@@ -2351,7 +2417,7 @@ Section Language.
         eapply (whp_split (m == l0)).
         + rewrite whp_switch_cond.
           eapply whp_contract.
-          rewrite_fill_cond_true.
+          rewrite_fill_cond_if_true.
           eapply whp_impl_refl.
         + assert (forall a b c,
                      whp (~a -> b -> c) ->
@@ -2359,7 +2425,7 @@ Section Language.
             as disj_hyp_false
             by (intros; unpack_whp; btauto).
           eapply disj_hyp_false; clear disj_hyp_false.
-          rewrite_fill_cond_false.
+          rewrite_fill_cond_if_false.
           eapply whp_contract.
           eauto.
     Qed.
@@ -2369,10 +2435,10 @@ Section Language.
            (eif b then e1 else e2) == (eif b then e1' else e2)).
       rewrite (impl_if b).
       eapply (whp_split b).
-      - repeat rewrite_fill_cond_true.
+      - repeat rewrite_fill_cond_if_true.
         eapply whp_contract.
         eapply whp_impl_refl.
-      - repeat rewrite_fill_cond_false.
+      - repeat rewrite_fill_cond_if_false.
         do 2 eapply whp_contract.
         fold_eqwhp; reflexivity.
     Qed.
@@ -2401,7 +2467,7 @@ Section Language.
             (eif a then fill_hole C b else fill_hole C c).
     Proof.
       eapply (whp_split a);
-        [do 2 rewrite_fill_cond_true | do 2 rewrite_fill_cond_false];
+        [do 2 rewrite_fill_cond_if_true | do 2 rewrite_fill_cond_if_false];
         eapply whp_contract; fold_eqwhp; reflexivity.
     Qed.
 
@@ -3144,9 +3210,73 @@ Section Language.
         split; [reflexivity|].
         split; [solve_ewn; eauto|].
         { cbv [rK].
-          admit. } (* follows by oldness *)
+          intros H; apply pos_pair_inj_left in H; congruence. }
         split.
-        { admit. } (* follows by oldness *)
+        {
+          cbv [whp_function].
+          intros ????.
+          Local Opaque app.
+          repeat (setoid_rewrite or_False_l || setoid_rewrite or_False_r
+                  || setoid_rewrite or_refl || setoid_rewrite or_assoc
+                  || setoid_rewrite app_nil_l || setoid_rewrite app_nil_r
+                  || setoid_rewrite in_app_iff).
+          Local Transparent app.
+          intros H1 H2.
+
+          Ltac echange t :=
+            refine (_ : t).
+          Ltac echangein t H :=
+            let H' := fresh in
+            refine ((fun H' : t => _) H);
+            clear H;
+            rename H' into H.
+          echangein uconstr:(_ \/ In (x1, y1) l') H1.
+          echangein uconstr:(_ \/ In (x2, y2) l') H2.
+
+          destruct H1; destruct H2;
+            repeat progress
+                   lazymatch goal with
+                   | H : (_, _) = (_, _) |- _ => inversion_clear H
+                   | |- whp (?x1 == ?x2 -> ?y1 == ?y2) =>
+                     lazymatch y1 with
+                     | y2 => apply whp_contract; fold_eqwhp; reflexivity
+                     | _ => idtac
+                     end
+                   end.
+          Ltac deny_cond :=
+            match goal with
+            | |- whp (?a -> ?b)%expr =>
+              cut (whp (~ a));
+              [apply whp_impl;
+               rewrite_fill_cond_false;
+               apply whp_contract;
+               apply whp_explosion|]
+            end.
+          {
+            deny_cond.
+            edestruct Hnms as (?&?&?); eauto.
+            subst.
+            assert (forall x y, whp (random_nonce@x == random_nonce@y -> x == y)) by admit. (* context about random_nonce *)
+            assert (forall x y : positive, x <> y -> whp (~ ($x) == ($y))%expr) by admit. (* probabilistic reasoning *)
+            assert (pos_pair (S n, 1%positive) <> x).
+            { cbn [expr_old] in H1.
+              intro; eapply old_different; eauto. }
+            { (* todo abstract lemma about the safety of random nonces *)
+              set (a := ($(pos_pair (S n, 1%positive)%core))%expr).
+              set (b := ($x)%expr).
+              assert (whp (~(a == b))) by (eapply H2; eauto).
+              assert (forall x, eqwhp (~x) (x -> #vfalse))
+                by (intros; cbv [eqwhp]; unpack_whp; btauto).
+              rewrite H5.
+              rewrite H5 in H4.
+              specialize (H a b).
+              contract_trans_whp.
+              eauto.
+            }
+          }
+          { deny_cond; admit. } (* same as the previous *)
+          { eapply Hl'; eauto. }
+        }
         { intros n' m'.
 
           Local Opaque app.
@@ -3166,7 +3296,7 @@ Section Language.
           {
             change (In (n', m') l') in Hnm.
             edestruct (Hnms _ _ Hnm) as (ni & Hn' & Hni).
-            eexists; split; eauto using old_s.
+            eexists; split; eauto using old_S.
           }
         }
       }

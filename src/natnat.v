@@ -29,9 +29,8 @@ Proof.
   cbv [encode].
   enough (forall s b, b <= s -> decode (encode_sum s b) = (s - b, b)) as H.
   { intros.
-    set (s := a + b).
-    specialize (H s b).
-    replace (s - b) with a in H by omega.
+    specialize (H (a + b) b).
+    replace (a + b - b) with a in H by omega.
     apply H; omega.  }
   intros s.
   induction s; intros.

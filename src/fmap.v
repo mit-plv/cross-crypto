@@ -28,7 +28,7 @@ Section Maps.
       {
         per : M -> M -> Type;
         ok_empty : per empty empty;
-        ok_add : 
+        ok_add :
           forall (k1 k2:K) (_ : Kper k1 k2),
           forall (v1 v2:V) (_ : Vper v1 v2),
           forall (m1 m2 : M) (_ : per m1 m2),

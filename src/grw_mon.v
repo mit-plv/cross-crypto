@@ -9,40 +9,11 @@ Notation madd := (mapops _).(fmap.add).
 Notation mfind := (mapops _).(fmap.find).
 Notation mfold := (mapops _).(fmap.fold_ac).
 
-(* the positivity checker requires that "map type" is list (nat * type) *)
 Inductive type : Type :=
 | tunit : type
 | tnat : type
 | tbool : type
-| tprod : type -> type -> type
-| tmap : map type -> type.
-
-Section TypeRec.
-  Context (P : type -> Type)
-          (Q : map type -> Type)
-          (ctunit : P tunit)
-          (ctnat : P tnat)
-          (ctbool : P tbool)
-          (ctprod : forall t1 t2, P t1 -> P t2 -> P (tprod t1 t2))
-          (ctmap : forall m, Q m -> P (tmap m))
-          (cnil : Q nil)
-          (ccons : forall n t m, P t -> Q m -> Q (cons (n, t) m)).
-
-  Fixpoint type_tmap_rect (t : type) : P t.
-    refine match t with
-           | tunit => ctunit
-           | tnat => ctnat
-           | tbool => ctbool
-           | tprod _ _ => ctprod _ _ _ _
-           | tmap m => ctmap _ _
-           end; eauto.
-    revert m; fix tmap_type_rect 1; intros m.
-    refine match m with
-           | nil => cnil
-           | cons (_, _) _ => ccons _ _ _ _ _
-           end; eauto.
-  Defined.
-End TypeRec.
+| tprod : type -> type -> type.
 
 Fixpoint interp_type (t : type) : Set :=
   match t with
@@ -50,20 +21,11 @@ Fixpoint interp_type (t : type) : Set :=
   | tnat => nat
   | tbool => bool
   | tprod t1 t2 => interp_type t1 * interp_type t2
-  | tmap m => (fix interp_tmap (m : map type) : Set :=
-                 match m with
-                 | nil => unit
-                 | cons (n, t) m => (interp_type t * interp_tmap m)%type
-                 end) m
   end.
 
 (* necessary for ret *)
 Local Instance interp_type_eqdec {t} : EqDec (interp_type t).
-Proof.
-  induction t using type_tmap_rect
-    with (Q := fun m => EqDec (interp_type (tmap m)));
-    typeclasses eauto.
-Defined.
+Proof. induction t; typeclasses eauto. Defined.
 
 Definition cfunc (t1 t2 : type) : Type :=
   interp_type t1 -> interp_type t2.
@@ -97,6 +59,12 @@ Fixpoint interp_expr {t1 t2} (e : expr t1 t2) : func t1 t2 :=
   | etensor e e' => ftensor (interp_expr e) (interp_expr e')
   end.
 
+Fixpoint tmap (m : map type) : type :=
+  match m with
+  | nil => tunit
+  | cons (_, t) m => tprod t (tmap m)
+  end.
+
 Definition empty : cfunc tunit (tmap mempty) := fun _ => tt.
 
 Definition find (m : map type) (i : nat) (l : interp_type (tmap m))
@@ -105,12 +73,11 @@ Definition find (m : map type) (i : nat) (l : interp_type (tmap m))
     | None => unit
     end.
   cbv [fmap.find mapops list_of_pairs].
-  induction m as [|[n t] m]; cbn [interp_type find] in l |- *.
+  induction m as [|[n t] m]; cbn [interp_type tmap find option_map] in l |- *.
   - exact tt.
   - destruct (n =? i); cbn [option_map snd].
     + exact (fst l).
-    + apply IHm.
-      exact (snd l).
+    + apply IHm; exact (snd l).
 Defined.
 
 Definition add (m : map type) (i : nat) (t : type) (x : interp_type t)

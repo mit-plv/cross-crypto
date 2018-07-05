@@ -35,7 +35,7 @@ Module monad.
     Let m := monad.m M.
     Let ret {T} := @monad.ret M T.
     Let bind {A B} := @monad.bind M A B.
-    
+
     Record ok :=
       {
         bind_ret_l : forall {A B} (a : A) (f : A -> m B) , bind (ret a) f = f a;
@@ -47,7 +47,7 @@ Module monad.
     Definition commutative :=
       forall A B C (a : m A) (b : m B) (f : A -> B -> m C),
         bind a (fun a => bind b (fun b => f a b)) = bind b (fun b => bind a (fun a => f a b)).
-                                       
+
   End with_monad.
 End monad.
 Notation monad := monad.monad.
@@ -162,7 +162,7 @@ Goal False.
   let l2 := constr:(cons bool (cons unit nil)) in
   let l3 := list_union l1 l2 in
   constr_eq l3 (nat :: bool :: unit :: nil)%list.
-  
+
   let l1 := constr:(cons (list nat) (cons unit nil)) in
   let l2 := constr:(cons bool (cons unit nil)) in
   let l3 := list_union l1 l2 in
@@ -182,7 +182,7 @@ Section WithMonad.
   Let bind {A B} := @monad.bind M A B.
   Reserved Notation "A <- X ; B" (at level 70, X at next level, right associativity, format "'[v' A  <-  X ; '/' B ']'").
   Local Notation    "A <- X ; B" := (bind X (fun A => B)).
-  
+
 
   Ltac types_in e :=
     (* FIXME: exclude function types *)
@@ -300,7 +300,7 @@ Constants are treated as functions of 0 arguments and thus bound instead of inli
 
 Each expression has
 - 0 or more bound operations
-- a final oputput operation
+- a final output operation
 
 
 Matching a lemma should be equivalent to transforming a program to a form where the lemma is a subexpression:
@@ -333,7 +333,7 @@ Note that it is important that
 - b and b' are different binders in the original expression (e.g., B may be coin toss in the probability monad)
 - b and b' do not appear outside the subexpression; in particular, they are not arguments to D, and X only appears inside the subexpression
 
-Now, a lemma that is unviversally quantified over D and over the operation that defines a (but not necessarily over K) can be used to rewrite the computation of c.
+Now, a lemma that is universally quantified over D and over the operation that defines a (but not necessarily over K) can be used to rewrite the computation of c.
 
 To check that the expression can be rewritten in this way, the matcher needs to maintain the following state:
 
@@ -447,25 +447,8 @@ Module simply_typed.
         end
       end.
 
-    (* apparently we can't write a non-total tail-recursive interpreter because of binders *)
-    (*
-    Fixpoint interp_ (ctx : list { t : type.type & type_interp t}) (p1 : list operation) (p2 : operation) {struct p1} : option { t : type.type & m (type_interp t)} :=
-      match p1 with
-      | o::p1 =>
-        match interp_operation (FromNil.nth_error ctx) o with
-        | None => None
-        | Some (existT _ u x)
-          =>
-          (* M.(monad.bind) x (fun bound => interp_ ((existT _ u bound) :: ctx) p1 p2) (* doesn't typeckeck because would return [m (option ...)]*) *)
-          match interp_ ((existT _ u (*???*)_(*free variable?*)) :: ctx) p1 p2 with
-          | None => None
-          | Some body =>
-            M.(monad.bind) x body (* doesn't typecheck because body lacks binder *)
-          end
-        end
-      | nil => interp_operation (FromNil.nth_error ctx) p2
-      end.
-     *)
+    (* We can't write a non-total tail-recursive interpreter because of
+       binders. *)
 
     Definition interp_operation_silent ctx o t :=
       match interp_operation ctx o t with
@@ -520,14 +503,14 @@ Module simply_typed.
         | Some ip' =>
           if Nat.eqb ip' ip
           then Some (lem2prog, prog2lem) (* nop (reverse map is fine by invariant) *)
-          else None (* confict -- lemma-side variable already used for something else (TODO: handle ret) *)
+          else None (* conflict -- lemma-side variable already used for something else (TODO: handle ret) *)
         | None => (* unify... *)
           let lem2prog := add il ip lem2prog in
           match find ip prog2lem with
           | Some il' =>
             if Nat.eqb il il'
             then Some (lem2prog, prog2lem) (* nop *)
-            else None (* confict -- program-side variable already used for something else (TODO: handle ret) *)
+            else None (* conflict -- program-side variable already used for something else (TODO: handle ret) *)
           | None => (* unify... *)
             let prog2lem := add ip il prog2lem in
             Some (lem2prog, prog2lem)
@@ -603,7 +586,7 @@ Module simply_typed.
             Some (l', o')
           end
         end.
-        
+
 
       Check
         fun lemma_rhs : expr =>
@@ -629,7 +612,7 @@ Module simply_typed.
                  | |- context [match ?E with None => _ | _ => _ end] => destruct E eqn:?
                  | |- context[eqb_const ?t ?a ?b] => destruct (eqb_const t a b) eqn:?
                  end.
-             
+
       Abort.
     End unification.
 
@@ -667,7 +650,7 @@ normalization: sort by (topological order, arbitrary strict order)
 single-output lemmas:
 match root of lemma LHS expression tree first, then its dependencies, then their dependencies
 the matching needs to be isolated in various ways:
-the internal binds of the lemma cannot be matched to the same bind in code: conunterexample coin xor coin
+the internal binds of the lemma cannot be matched to the same bind in code: counterexample coin xor coin
 the internal binds must be removed during the rewrite, so they cannot be used anywhere else: (coin xor coin) xor (coin xor coin)
 for the proof of this, we want to say that the code is equivalent to [ctx1; x <-(lemma...); ctx2]
 this will require queries to a commutability oracle to move parts of the lemma to be adjacent (we probably want to move everything next to the root)

@@ -396,7 +396,7 @@ Proof.
     eauto.
 Qed.
 
-Lemma lookup_renumber_ref ctxt ctx ctxt' ctx' f r t :
+Lemma lookup_renumbered_ref ctxt ctx ctxt' ctx' f r t :
   context_renumbered f ctxt ctx ctxt' ctx' ->
   lookup_ref ctxt' ctx' (renumber_ref f r) t =
   lookup_ref ctxt ctx r t.
@@ -409,24 +409,19 @@ Proof.
   reflexivity.
 Qed.
 
-Lemma interp_op_renumber n f o ctxt ctx ctxt' ctx' tk
+Lemma interp_renumbered_op n f o ctxt ctx ctxt' ctx' tk
       (k k' : forall ctxt, interp_type ctxt -> M tk) :
   context_renumbered (offset_renumbering n f) ctxt ctx ctxt' ctx' ->
   continuation_renumbered (offset_renumbering (n + 1) f) tk k k' ->
   Mequiv
     (Mbind (interp_op_silent ctxt ctx o)
-       (fun x : interp_type (op_type o) =>
-        k (op_type o * ctxt)%etype (x, ctx)))
+       (fun x => k (op_type o * ctxt)%etype (x, ctx)))
     (Mbind
        (interp_op_silent ctxt' ctx'
           (renumber_op (offset_renumbering n f) o))
-       (fun
-          x : interp_type
-                (op_type
-                   (renumber_op (offset_renumbering n f) o)) =>
-        k'
-          (op_type (renumber_op (offset_renumbering n f) o) *
-           ctxt')%etype (x, ctx'))).
+       (fun x => k'
+                   (op_type (renumber_op (offset_renumbering n f) o) *
+                    ctxt')%etype (x, ctx'))).
 Proof.
   intros Hctx Hk.
   destruct o; cbn [renumber_op op_type];
@@ -439,10 +434,10 @@ Proof.
        eapply context_renumbered_1; eauto]).
   - reflexivity.
   - cbv [interp_op_silent interp_op].
-    erewrite lookup_renumber_ref by eauto.
+    erewrite lookup_renumbered_ref by eauto.
     reflexivity.
   - cbv [interp_op_silent interp_op].
-    erewrite lookup_renumber_ref by eauto.
+    erewrite lookup_renumbered_ref by eauto.
     reflexivity.
 Qed.
 
@@ -467,6 +462,121 @@ Proof.
   setoid_rewrite interp_bindings_app.
   eapply IHp.
   cbn [interp_bindings].
-  intros ctxt ctx ctxt' ctx' Hctx'.
-  eapply interp_op_renumber; eauto.
+  intros ?????; eapply interp_renumbered_op; eauto.
+Qed.
+
+Fixpoint refs (r : ref) (n : nat) :=
+  match r with
+  | ref_index k => n = k
+  | ref_pair r1 r2 => refs r1 n \/ refs r2 n
+  end.
+
+Definition op_refs (o : operation) (n : nat) :=
+  match o with
+  | op_unit => False
+  | op_app _ r | op_retapp _ r => refs r n
+  end.
+
+Lemma Mbind_comm (t1 t2 t3 : type) (c1 : M t1) (c2 : M t2)
+      (c3 : interp_type t1 -> interp_type t2 -> M t3) :
+  Mequiv (Mbind c1 (fun a => Mbind c2 (fun b => c3 a b)))
+         (Mbind c2 (fun b => Mbind c1 (fun a => c3 a b))).
+Proof. eapply Bind_comm. Qed.
+
+Lemma lookup_unref_0 ctxt (ctx : interp_type ctxt)
+      t (x : interp_type t) r u :
+  ~refs r 0 ->
+  lookup_ref (t * ctxt) (x, ctx) r u =
+  lookup_ref ctxt ctx (renumber_ref pred r) u.
+Proof.
+  intros.
+  revert u; induction r; intros u; cbn [refs] in *.
+  - destruct n; cbn [lookup_ref lookup renumber_ref pred];
+      congruence.
+  - cbn [lookup_ref lookup renumber_ref].
+    destruct u; try reflexivity.
+    rewrite IHr1, IHr2 by intuition idtac.
+    reflexivity.
+Qed.
+
+Lemma lookup_ref_S ctxt (ctx : interp_type ctxt)
+      t (x : interp_type t) r u :
+  lookup_ref (t * ctxt) (x, ctx) (renumber_ref S r) u =
+  lookup_ref ctxt ctx r u.
+Proof.
+  intros.
+  revert u; induction r; intros u.
+  - reflexivity.
+  - cbn [renumber_ref lookup_ref lookup].
+    destruct u; try reflexivity.
+    rewrite IHr1, IHr2.
+    reflexivity.
+Qed.
+
+Lemma commute_ops ctxt (ctx : interp_type ctxt)
+      (o1 o2 : operation)
+      tk (k k' : forall ctxt, interp_type ctxt -> M tk) :
+  ~op_refs o2 0 ->
+  continuation_renumbered (fun n => match n with
+                                    | 0 => 1
+                                    | 1 => 0
+                                    | _ => n
+                                    end) tk k k' ->
+  Mequiv (interp_bindings ctxt ctx (o1 :: o2 :: nil) tk k)
+         (interp_bindings ctxt ctx
+                          (renumber_op pred o2 :: renumber_op S o1 :: nil)
+                          tk k').
+Proof.
+  intros Ho2 Hk.
+  cbn [interp_bindings].
+
+  transitivity
+    (Mbind (interp_op_silent ctxt ctx o1)
+           (fun x =>
+              Mbind (interp_op_silent (op_type o1 * ctxt) (x, ctx) o2)
+                    (fun y =>
+                       k' (op_type o1 * (op_type o2 * ctxt))%etype
+                          (x, (y, ctx))))).
+  { eapply Mequiv_Mbind; [reflexivity|intros x].
+    eapply Mequiv_Mbind; [reflexivity|intros y].
+    eapply Hk.
+    intros [|[]] ?; reflexivity. }
+
+  transitivity
+  (Mbind (interp_op_silent ctxt ctx o1)
+         (fun x =>
+            Mbind (interp_op_silent ctxt ctx (renumber_op pred o2))
+                  (fun y =>
+                     k' (op_type o1 *
+                         (op_type (renumber_op pred o2) * ctxt))%etype
+                        (x, (y, ctx))))).
+  { eapply Mequiv_Mbind; [reflexivity|intros x].
+    destruct o2; cbn [op_type renumber_op];
+      (eapply Mequiv_Mbind; [|reflexivity]);
+      cbn [op_refs] in Ho2; cbv [interp_op_silent interp_op].
+    - reflexivity.
+    - rewrite lookup_unref_0 by eauto.
+      reflexivity.
+    - rewrite lookup_unref_0 by eauto.
+      reflexivity. }
+
+  transitivity
+  (Mbind (interp_op_silent ctxt ctx (renumber_op pred o2))
+         (fun y =>
+            Mbind (interp_op_silent ctxt ctx o1)
+                  (fun x =>
+                     k' (op_type o1 *
+                         (op_type (renumber_op pred o2) * ctxt))%etype
+                        (x, (y, ctx))))).
+  { eapply Mbind_comm. }
+
+  { eapply Mequiv_Mbind; [reflexivity|intros y].
+    destruct o1; cbn [op_type renumber_op];
+      (eapply Mequiv_Mbind; [|reflexivity]);
+      cbv [interp_op_silent interp_op].
+    - reflexivity.
+    - rewrite lookup_ref_S.
+      reflexivity.
+    - rewrite lookup_ref_S.
+      reflexivity. }
 Qed.

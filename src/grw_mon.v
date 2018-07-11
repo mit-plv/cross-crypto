@@ -1,10 +1,8 @@
-Require Import CrossCrypto.fmap.list_of_pairs.
-Require CrossCrypto.fmap.
 Require Import FCF.FCF FCF.EqDec.
 Require Import Coq.Classes.Morphisms.
-Require Import CrossCrypto.RewriteUtil.
 Require Import Coq.derive.Derive.
 Require Import Coq.Logic.Eqdep_dec.
+Require Import CrossCrypto.RewriteUtil.
 
 Inductive type : Set :=
 | tunit : type
@@ -30,6 +28,22 @@ Fixpoint interp_type (t : type) : Set :=
 (* necessary for ret *)
 Local Instance interp_type_eqdec {t} : EqDec (interp_type t).
 Proof. induction t; typeclasses eauto. Defined.
+
+Ltac type_head x :=
+  match x with
+  | tunit => idtac
+  | tnat => idtac
+  | tbool => idtac
+  | tprod _ _ => idtac
+  end.
+
+Fixpoint type_inhabited {t : type} : interp_type t :=
+  match t with
+  | tunit => tt
+  | tbool => false
+  | tnat => 0%nat
+  | tprod t1 t2 => (type_inhabited, type_inhabited)
+  end.
 
 Definition cfunc (t1 t2 : type) : Type :=
   interp_type t1 -> interp_type t2.
@@ -202,14 +216,8 @@ Ltac disprove_recursion :=
     omega
   end.
 
-Ltac type_head x :=
-  match x with
-  | tunit => idtac
-  | tnat => idtac
-  | tbool => idtac
-  | tprod _ _ => idtac
-  end.
-
+(* TODO Maybe possible to improve this proof by injecting into a version
+   with type-codes erased and showing a partial retraction? *)
 Definition box_sigT_dec {t1 t2 t1' t2'} (b : box t1 t2)
            (b' : box t1' t2') :
   let P := fun '(t1, t2) => box t1 t2 : Type in
@@ -431,14 +439,6 @@ Fixpoint tlist (m : list type) : type :=
   match m with
   | nil => tunit
   | cons t m => t * (tlist m)
-  end.
-
-Fixpoint type_inhabited {t : type} : interp_type t :=
-  match t with
-  | tunit => tt
-  | tbool => false
-  | tnat => 0%nat
-  | tprod t1 t2 => (type_inhabited, type_inhabited)
   end.
 
 (* empty is just @id unit *)
@@ -686,5 +686,33 @@ Section ExampleCoins.
     setoid_rewrite interchange.
 
     setoid_rewrite id_l.
+
+    cbn [index nat_rec nat_rect units type_rec type_rect tlist
+        associate associate_type unassociate].
+    assert (forall t1 t2 t3 (f : box t1 t2) (g : box t2 t3),
+               equiv [[f @ g]] ([[f]] @ [[g]]))%expr as box_compose
+        by admit.
+    assert (forall t1 t2 t1' t2' (f : box t1 t2) (f' : box t1' t2'),
+               equiv [[f * f']] ([[f]] * [[f']]))%expr as box_tensor
+        by admit.
+    repeat (setoid_rewrite box_compose ||
+            setoid_rewrite box_tensor).
+
+    assert (forall t1 t2 (x : expr t1 t2),
+               equiv ([[copy]] @ (x * [[delete]]))
+                     (x @ [[iunit_r]])) as copy_delete_r
+      by admit.
+    setoid_rewrite copy_delete_r.
+
+    assert (forall t1 t2, equiv ([[@id t1]] * [[@id t2]]) [[id]]) as id_tensor by admit.
+
+    setoid_rewrite id_l.
+    setoid_rewrite id_tensor.
+    setoid_rewrite id_tensor.
+
+    assert (forall t1 t2 (x : expr t1 t2), equiv (x @ [[id]]) x) as id_r by admit.
+    setoid_rewrite id_r.
+    setoid_rewrite id_l.
+    (* TODO commute copy and tensor *)
   Abort.
 End ExampleCoins.

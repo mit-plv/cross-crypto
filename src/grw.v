@@ -282,6 +282,18 @@ Fixpoint optsub (n m : nat) {struct m} : option nat :=
 
 Local Notation "a -? b" := (optsub a b) (left associativity, at level 50).
 
+Lemma optsub_plus a b :
+  match a -? b with
+  | Some c => a = b + c
+  | None => True
+  end.
+Proof.
+  revert a; induction b; intros a; cbn [optsub plus]; eauto.
+  destruct a; eauto.
+  specialize (IHb a).
+  destruct (a -? b); eauto.
+Qed.
+
 Definition offset_renumbering (offset : nat)
            (f : nat -> nat) (n : nat) : nat :=
   match n -? offset with
@@ -298,27 +310,66 @@ Fixpoint renumber_bindings (f : nat -> nat) (p : list operation)
          (renumber_bindings (offset_renumbering 1 f) p)
   end.
 
-Section RenumberExt.
-  Context (f f' : nat -> nat)
-          (H : forall n, f n = f' n).
-  Lemma renumber_ref_ext r : renumber_ref f r = renumber_ref f' r.
-  Proof. induction r; cbn [renumber_ref]; congruence. Qed.
-  Lemma renumber_op_ext o : renumber_op f o = renumber_op f' o.
+Fixpoint refs (r : ref) (n : nat) :=
+  match r with
+  | ref_index k => n = k
+  | ref_pair r1 r2 => refs r1 n \/ refs r2 n
+  end.
+
+Definition op_refs (o : operation) (n : nat) :=
+  match o with
+  | op_unit => False
+  | op_app _ r | op_retapp _ r => refs r n
+  end.
+
+Fixpoint bindings_ref (p : list operation) (n : nat) :=
+  match p with
+  | nil => False
+  | o :: p => op_refs o n \/ bindings_ref p (S n)
+  end.
+
+Lemma bindings_ref_app (p1 p2 : list operation) n :
+  bindings_ref (p1 ++ p2) n <->
+  bindings_ref p1 n \/ bindings_ref p2 (length p1 + n).
+Proof.
+  revert n; induction p1; intros n; cbn [bindings_ref length plus app].
+  - intuition idtac.
+  - replace (S (length p1 + n)) with (length p1 + S n) by omega.
+    setoid_rewrite IHp1; intuition idtac.
+Qed.
+
+Lemma renumber_ref_ext f f' r :
+  (forall i, refs r i -> f i = f' i) ->
+  renumber_ref f r = renumber_ref f' r.
   Proof.
-    induction o; cbn [renumber_op]; try rewrite renumber_ref_ext; congruence.
+    intros Hf; induction r; cbn [renumber_ref refs] in *.
+    - rewrite Hf; eauto.
+    - rewrite IHr1, IHr2; eauto.
   Qed.
-End RenumberExt.
-Lemma renumber_bindings_ext f f' p :
-  (forall n, f n = f' n) ->
+
+  Lemma renumber_op_ext f f' o :
+    (forall i, op_refs o i -> f i = f' i) ->
+    renumber_op f o = renumber_op f' o.
+  Proof.
+    intros Hf; induction o; cbn [renumber_op];
+      try erewrite renumber_ref_ext; eauto.
+  Qed.
+
+Lemma renumber_bindings_ext_relevant f f' p :
+  (forall i, bindings_ref p i -> f i = f' i) ->
   renumber_bindings f p = renumber_bindings f' p.
 Proof.
   revert f f'; induction p as [|o p]; eauto.
-  intros; cbn [renumber_bindings].
-  f_equal; eauto using renumber_op_ext.
+  intros; cbn [renumber_bindings bindings_ref] in *.
+  f_equal; try (erewrite renumber_op_ext; eauto).
   apply IHp.
-  intros n.
-  cbv [offset_renumbering]; destruct (optsub n 1); congruence.
+  intros []; cbv [offset_renumbering optsub]; eauto.
 Qed.
+
+Lemma renumber_bindings_ext f f' p :
+  (forall i, f i = f' i) ->
+  renumber_bindings f p = renumber_bindings f' p.
+Proof. intros; eapply renumber_bindings_ext_relevant; eauto. Qed.
 
 Lemma offset_renumbering_plus a b n f :
   offset_renumbering (a + b) f n =
@@ -396,35 +447,38 @@ Proof.
     eauto.
 Qed.
 
-Lemma lookup_renumbered_ref ctxt ctx ctxt' ctx' f r t :
+Lemma lookup_renumbered_ref ctxt ctx ctxt' ctx' f g r t :
   context_renumbered f ctxt ctx ctxt' ctx' ->
-  lookup_ref ctxt' ctx' (renumber_ref f r) t =
+  (forall i, refs r i -> g i = f i) ->
+  lookup_ref ctxt' ctx' (renumber_ref g r) t =
   lookup_ref ctxt ctx r t.
 Proof.
   cbv [context_renumbered].
-  intros.
-  revert t; induction r; intros t; cbn [lookup_ref renumber_ref]; eauto.
-  destruct t; eauto.
-  rewrite IHr1, IHr2.
-  reflexivity.
+  intros ? Hg.
+  revert t; induction r; intros t; cbn [lookup_ref renumber_ref refs] in *.
+  - rewrite Hg; cbn [refs]; eauto.
+  - destruct t; eauto.
+    rewrite IHr1, IHr2 by eauto.
+    reflexivity.
 Qed.
 
-Lemma interp_renumbered_op n f o ctxt ctx ctxt' ctx' tk
+Lemma interp_renumbered_op n f g o ctxt ctx ctxt' ctx' tk
       (k k' : forall ctxt, interp_type ctxt -> M tk) :
   context_renumbered (offset_renumbering n f) ctxt ctx ctxt' ctx' ->
   continuation_renumbered (offset_renumbering (n + 1) f) tk k k' ->
+  (forall i, op_refs o (n + i) -> g i = f i) ->
   Mequiv
     (Mbind (interp_op_silent ctxt ctx o)
        (fun x => k (op_type o * ctxt)%etype (x, ctx)))
     (Mbind
        (interp_op_silent ctxt' ctx'
-          (renumber_op (offset_renumbering n f) o))
+          (renumber_op (offset_renumbering n g) o))
        (fun x => k'
-                   (op_type (renumber_op (offset_renumbering n f) o) *
+                   (op_type (renumber_op (offset_renumbering n g) o) *
                     ctxt')%etype (x, ctx'))).
 Proof.
-  intros Hctx Hk.
-  destruct o; cbn [renumber_op op_type];
+  intros Hctx Hk Hg.
+  destruct o; cbn [renumber_op op_type op_refs] in *;
     (eapply Mequiv_Mbind;
      [|intros;
        eapply Hk;
@@ -434,11 +488,42 @@ Proof.
        eapply context_renumbered_1; eauto]).
   - reflexivity.
   - cbv [interp_op_silent interp_op].
-    erewrite lookup_renumbered_ref by eauto.
+    erewrite lookup_renumbered_ref by
+        (eauto; cbv [offset_renumbering];
+         intros i ?; pose proof optsub_plus i n;
+         destruct (i -? n); subst; eauto).
     reflexivity.
   - cbv [interp_op_silent interp_op].
-    erewrite lookup_renumbered_ref by eauto.
+    erewrite lookup_renumbered_ref by
+        (eauto; cbv [offset_renumbering];
+         intros i ?; pose proof optsub_plus i n;
+         destruct (i -? n); subst; eauto).
     reflexivity.
+Qed.
+
+Lemma interp_renumbered_bindings_relevant (f g : nat -> nat)
+      (p : list operation)
+      tk (k k' : forall ctxt : type, interp_type ctxt -> M tk) :
+  continuation_renumbered (offset_renumbering (length p) f) tk k k' ->
+  (forall i, bindings_ref p i -> g i = f i) ->
+  continuation_renumbered
+    f tk
+    (fun ctxt ctx => interp_bindings ctxt ctx p tk k)
+    (fun ctxt ctx => interp_bindings ctxt ctx (renumber_bindings g p) tk k').
+Proof.
+  revert tk k k'.
+  pattern p; revert p; eapply rev_ind;
+    cbn [renumber_bindings interp_bindings length offset_renumbering
+                           optsub plus]; eauto.
+  intros o p IHp tk k k' Hkk' Hg.
+  rewrite app_length in Hkk'; cbn [length] in Hkk'.
+  setoid_rewrite bindings_ref_app in Hg; cbn [bindings_ref] in Hg.
+  rewrite renumber_bindings_app.
+  cbn [renumber_bindings].
+  setoid_rewrite interp_bindings_app.
+  eapply IHp; eauto.
+  cbn [interp_bindings].
+  intros ?????; eapply interp_renumbered_op; eauto.
 Qed.
 
 Lemma interp_renumbered_bindings (f : nat -> nat)
@@ -449,33 +534,7 @@ Lemma interp_renumbered_bindings (f : nat -> nat)
     f tk
     (fun ctxt ctx => interp_bindings ctxt ctx p tk k)
     (fun ctxt ctx => interp_bindings ctxt ctx (renumber_bindings f p) tk k').
-Proof.
-  revert tk k k'.
-  pattern p; eapply rev_ind;
-    cbn [renumber_bindings interp_bindings length offset_renumbering
-                           optsub plus]; eauto.
-  clear p.
-  intros o p IHp tk k k' Hkk'.
-  rewrite app_length in Hkk'; cbn [length] in Hkk'.
-  rewrite renumber_bindings_app.
-  cbn [renumber_bindings].
-  setoid_rewrite interp_bindings_app.
-  eapply IHp.
-  cbn [interp_bindings].
-  intros ?????; eapply interp_renumbered_op; eauto.
-Qed.
-
-Fixpoint refs (r : ref) (n : nat) :=
-  match r with
-  | ref_index k => n = k
-  | ref_pair r1 r2 => refs r1 n \/ refs r2 n
-  end.
-
-Definition op_refs (o : operation) (n : nat) :=
-  match o with
-  | op_unit => False
-  | op_app _ r | op_retapp _ r => refs r n
-  end.
+Proof. intros; eapply interp_renumbered_bindings_relevant; eauto. Qed.
 
 Lemma Mbind_comm (t1 t2 t3 : type) (c1 : M t1) (c2 : M t2)
       (c3 : interp_type t1 -> interp_type t2 -> M t3) :
@@ -579,4 +638,149 @@ Proof.
       reflexivity.
     - rewrite lookup_ref_S.
       reflexivity. }
+Qed.
+
+Section RenumberRenumber.
+  Context (h g f : nat -> nat)
+          (Ih : forall x, h x = g (f x)).
+  Lemma renumber_renumber_ref r :
+    renumber_ref h r = renumber_ref g (renumber_ref f r).
+  Proof. induction r; cbn [renumber_ref]; congruence. Qed.
+  Lemma renumber_renumber_op o :
+    renumber_op h o = renumber_op g (renumber_op f o).
+  Proof. destruct o; cbn [renumber_op];
+           repeat rewrite renumber_renumber_ref; eauto. Qed.
+End RenumberRenumber.
+
+Lemma renumber_renumber_bindings (h g f : nat -> nat) p :
+  (forall x, h x = g (f x)) ->
+  renumber_bindings h p = renumber_bindings g (renumber_bindings f p).
+Proof.
+  revert h g f; induction p; intros h g f Ih; cbn [renumber_bindings]; eauto.
+  erewrite (renumber_renumber_op h); eauto.
+  erewrite IHp; eauto.
+  intros []; cbn [offset_renumbering optsub plus]; eauto.
+Qed.
+
+Lemma length_renumber f p : length (renumber_bindings f p) = length p.
+Proof. revert f; induction p; cbn [renumber_bindings length]; congruence. Qed.
+
+Lemma refs_renumber f r j :
+  refs (renumber_ref f r) j <-> exists i, f i = j /\ refs r i.
+Proof.
+  induction r; cbn [renumber_ref refs];
+    intuition repeat match goal with
+                     | H : exists _, _ |- _ => destruct H as (?&<-&?)
+                     | _ => intuition eauto
+                     end.
+Qed.
+
+Lemma op_refs_renumber f o j :
+  op_refs (renumber_op f o) j <-> exists i, f i = j /\ op_refs o i.
+Proof.
+  destruct o; cbn [renumber_op op_refs];
+    intuition repeat match goal with
+                     | H : exists _, _ |- _ => destruct H as (?&<-&?)
+                     | H : _ |- _ => setoid_rewrite refs_renumber in H
+                     | _ => setoid_rewrite refs_renumber
+                     | _ => intuition eauto
+                     end.
+Qed.
+
+Lemma bindings_ref_renumber f p j :
+  bindings_ref (renumber_bindings f p) j <->
+  exists i, f i = j /\ bindings_ref p i.
+Proof.
+  revert f j; induction p; intros;
+    intuition repeat multimatch goal with
+                     | H : exists _, _ |- _ => destruct H as (?&<-&?)
+                     | H : _ |- _ => setoid_rewrite op_refs_renumber in H
+                     | _ => setoid_rewrite op_refs_renumber
+                     | _ => cbn [bindings_ref renumber_bindings] in *
+                     | _ => intuition eauto
+                     end.
+  - rewrite IHp in *;
+      repeat match goal with
+             | H : exists _, _ |- _ =>
+               let x := fresh in
+               destruct H as ([]&?&?);
+                 cbv [offset_renumbering optsub] in *
+             | _ => congruence
+             | _ => intuition eauto
+             end.
+  - rewrite IHp;
+      right; eexists (S _); cbv [offset_renumbering optsub]; eauto.
+Qed.
+
+Lemma renumber_id_ref r :
+  renumber_ref (fun x => x) r = r.
+Proof. induction r; cbn [renumber_ref]; congruence. Qed.
+
+Lemma renumber_id_op o :
+  renumber_op (fun x => x) o = o.
+Proof.
+  destruct o; cbn [renumber_op]; try rewrite renumber_id_ref; congruence.
+Qed.
+
+Lemma commute_many ctxt (ctx : interp_type ctxt)
+      (o : operation) (p : list operation)
+      tk (ks : nat -> forall ctxt, interp_type ctxt -> M tk) :
+  ~bindings_ref p 0 ->
+  (forall j,
+      j < length p ->
+      continuation_renumbered
+        (offset_renumbering j
+           (fun n => match n with
+                     | 0 => 1
+                     | 1 => 0
+                     | _ => n
+                     end)) tk (ks (S j)) (ks j)) ->
+  Mequiv (interp_bindings ctxt ctx (o :: p) tk (ks (length p)))
+         (interp_bindings ctxt ctx
+                          ((renumber_bindings pred p)
+                             ++ renumber_op (plus (length p)) o :: nil)
+                          tk (ks 0)).
+Proof.
+  remember (length p) as lenp.
+  revert ctxt ctx o p Heqlenp;
+    induction lenp;
+    intros ctxt ctx o p Heqlenp Hp Hks;
+    destruct p as [|o' p]; try (cbn [length] in Heqlenp; congruence).
+  - cbn [interp_bindings renumber_bindings length plus].
+    rewrite renumber_id_op.
+    reflexivity.
+  - inversion Heqlenp; clear Heqlenp.
+    subst lenp.
+    cbn [bindings_ref] in *.
+    replace (o :: o' :: p) with ((o :: o' :: nil) ++ p)
+      by (eapply app_comm_cons).
+    rewrite interp_bindings_app.
+    etransitivity.
+    {
+      eapply commute_ops.
+      - cbn [bindings_ref] in Hp; eauto.
+      - eapply interp_renumbered_bindings.
+        eapply Hks; eauto.
+    }
+
+    cbn [renumber_bindings length interp_bindings] in IHlenp |- *.
+    eapply Mequiv_Mbind; [reflexivity|intros x].
+    fold interp_bindings.
+    fold (app (renumber_bindings (offset_renumbering 1 pred) p)).
+
+    etransitivity.
+    {
+      eapply IHlenp; eauto.
+      - rewrite length_renumber; eauto.
+      - setoid_rewrite bindings_ref_renumber.
+        intros ([|[]]&?&?); intuition congruence.
+    }
+
+    replace (renumber_op (plus (S (length p))) o) with
+        (renumber_op (plus (length p)) (renumber_op S o)) by
+        (erewrite <-renumber_renumber_op; eauto; intros; omega).
+    erewrite <-renumber_renumber_bindings by (intros; reflexivity).
+    rewrite renumber_bindings_ext_relevant with
+        (f' := (offset_renumbering 1 pred)); try reflexivity.
+    intros [|[]] ?; intuition idtac.
 Qed.

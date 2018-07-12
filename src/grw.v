@@ -121,7 +121,7 @@ Inductive operation : Type :=
 | op_retapp (c : ret_const) : ref -> operation.
 
 Lemma op_dec (o1 o2 : operation) : {o1 = o2} + {o1 <> o2}.
-Proof. repeat decide equality. Defined.
+Proof. repeat decide equality; congruence. Defined.
 
 Definition op_type o : type :=
   match o with

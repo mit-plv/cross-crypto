@@ -86,21 +86,24 @@ Definition interp_const c : interp_type (cdom c) -> M (ccod c) :=
 
 Inductive ret_const : Type :=
 | xor'
-| zero.
+| zero
+| id (t : type).
 
 Lemma retconst_dec (c1 c2 : ret_const) : {c1 = c2} + {c1 <> c2}.
-Proof. decide equality. Defined.
+Proof. repeat decide equality. Defined.
 
 Definition rcdom c : type :=
   match c with
   | xor' => tbool * tbool
   | zero => tunit
+  | id t => t
   end.
 
 Definition rccod c : type :=
   match c with
   | xor' => tbool
   | zero => tbool
+  | id t => t
   end.
 
 Definition interp_retconst c :
@@ -108,6 +111,7 @@ Definition interp_retconst c :
   match c with
   | xor' => fun '(x, y) => xorb x y
   | zero => fun _ => false
+  | id _ => fun x => x
   end.
 
 (* De bruijn indices which can be paired together to get a tuple *)
@@ -211,26 +215,6 @@ Definition interp_expr (ctxt : type) (ctx : interp_type ctxt)
   let '(p, o) := e in
   interp_bindings ctxt ctx p (op_type o)
                   (fun ctxt ctx => interp_op_silent ctxt ctx o).
-
-Example reflection_example :
-  let x := ((op_unit
-               :: op_unit
-               :: (op_app coin (ref_index 1))
-               :: (op_app coin (ref_index 1))
-               :: nil),
-            (op_retapp xor' (ref_pair (ref_index 0) (ref_index 1)))) in
-  {z | forall ctxt ctx,
-      let y := interp_expr ctxt ctx x in
-      Comp_eq y z}.
-Proof.
-  intros x.
-  eexists.
-  intros.
-  subst x y.
-  cbv - [Vector.nth xorb Comp_eq].
-  repeat setoid_rewrite Bind_unused.
-  reflexivity.
-Defined.
 
 Lemma Mequiv_Mbind (t1 t2 : type)
       (c1 c1' : M t1) (c2 c2' : interp_type t1 -> M t2) :
@@ -784,3 +768,80 @@ Proof.
         (f' := (offset_renumbering 1 pred)); try reflexivity.
     intros [|[]] ?; intuition idtac.
 Qed.
+
+Definition continuation_equiv tk
+           (k k' : forall ctxt, interp_type ctxt -> M tk) :=
+  forall ctxt ctx, Mequiv (k ctxt ctx) (k' ctxt ctx).
+
+Local Instance interp_bindings_Mequiv ctxt ctx p tk :
+  Proper (continuation_equiv tk ==> Mequiv)
+         (interp_bindings ctxt ctx p tk).
+Proof.
+  revert ctxt ctx; induction p;
+    cbn [interp_bindings]; intros ctxt ctx k k' ?; eauto.
+  eapply Mequiv_Mbind; [reflexivity|intros x].
+  eapply IHp; eauto.
+Qed.
+
+(* TODO:
+ * - matching algorithm
+ * - matching rewrite
+ * - reification
+ * - support for retconst
+ *   - duplicating/deduplicating rets
+ *)
+
+Section ExampleCoins.
+  Definition example_coin_lemma_lhs :=
+    (op_unit
+       :: op_unit
+       :: (op_app coin (ref_index 1))
+       :: (op_app coin (ref_index 1))
+       :: nil,
+     op_retapp xor' (ref_pair (ref_index 0) (ref_index 1))).
+
+  Definition example_coin_lemma_rhs :=
+    ((op_unit :: nil), op_app coin (ref_index 0)).
+
+  Lemma example_coin_lemma :
+    forall ctxt ctx,
+      Comp_eq (interp_expr ctxt ctx example_coin_lemma_lhs)
+              (interp_expr ctxt ctx example_coin_lemma_rhs).
+  Proof.
+    intros.
+    cbv -[Comp_eq interp_const interp_retconst];
+      cbn [interp_const interp_retconst].
+    repeat (setoid_rewrite Bind_Ret_l || setoid_rewrite <-Bind_assoc).
+    cbv [Comp_eq image_relation pointwise_relation evalDist getSupport
+                 getAllBvectors].
+    cbn [List.map app sumList fold_left
+                  Vector.nth xorb Vector.caseS
+                  expnat Nat.mul Nat.add].
+    generalize (@EqDec_dec bool (@interp_type_eqdec tbool)); intros d0.
+    generalize (EqDec_dec bool_EqDec); intros d1.
+    intros a.
+    destruct (d0 true a), (d0 false a); try congruence;
+      destruct (d1 true a), (d1 false a); try congruence;
+        reflexivity.
+  Qed.
+
+  Example coins_example :=
+    (op_unit
+       :: op_app coin (ref_index 0)
+       :: op_unit :: op_app coin (ref_index 0)
+       :: op_unit :: op_app coin (ref_index 0)
+       :: op_retapp xor' (ref_pair (ref_index 4) (ref_index 0))
+       :: nil,
+     op_retapp
+       (id ((tbool * tbool) * tbool))
+       (ref_pair (ref_pair (ref_index 0) (ref_index 3)) (ref_index 3))).
+
+  Derive coins_endpoint
+         SuchThat (forall ctxt ctx,
+                      (Mequiv (interp_expr ctxt ctx coins_example)
+                              (interp_expr ctxt ctx coins_endpoint)))
+         As coins_example_rewrite.
+  (* FIXME need a transport to avoid unifying the two exprs via their types *)
+  Fail let x := (eval cbv [coins_endpoint] in coins_endpoint) in is_evar x.
+  Abort.
+End ExampleCoins.

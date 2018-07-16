@@ -142,8 +142,7 @@ Definition transport {P : type -> Type} {a : type} (b : type) (p : P a)
 Defined.
 
 Fixpoint lookup (ctxt : type) (ctx : interp_type ctxt)
-         (n : nat) (t : type) {struct n}
-  : option (interp_type t).
+         (n : nat) (t : type) {struct n} : option (interp_type t).
   destruct ctxt; [exact None .. |].
   refine match n, ctx with
          | 0, (x, _) => transport t x
@@ -151,8 +150,8 @@ Fixpoint lookup (ctxt : type) (ctx : interp_type ctxt)
          end.
 Defined.
 
-Fixpoint lookup_ref (ctxt : type) (ctx : interp_type ctxt)
-         (r : ref) (t : type) {struct r} : option (interp_type t) :=
+Fixpoint lookup_ref ctxt ctx (r : ref) (t : type) {struct r}
+  : option (interp_type t) :=
   match r with
   | ref_index n => lookup ctxt ctx n t
   | ref_pair r1 r2 =>
@@ -166,8 +165,7 @@ Fixpoint lookup_ref (ctxt : type) (ctx : interp_type ctxt)
     end
   end.
 
-Definition interp_op (ctxt : type) (ctx : interp_type ctxt)
-           (o : operation) : option (M (op_type o)) :=
+Definition interp_op ctxt ctx o : option (M (op_type o)) :=
   match o with
   | op_unit => Some (@Mret tunit tt)
   | op_app c r => match lookup_ref ctxt ctx r (cdom c) with
@@ -180,8 +178,13 @@ Definition interp_op (ctxt : type) (ctx : interp_type ctxt)
                        end
   end.
 
-Definition interp_op_silent (ctxt : type) (ctx : interp_type ctxt)
-           (o : operation) : M (op_type o) :=
+Definition cast {a : type} (b : type) (x : interp_type a) : interp_type b :=
+  match transport b x with
+  | Some x => x
+  | None => type_inhabited
+  end.
+
+Definition interp_op_silent ctxt ctx o : M (op_type o) :=
   match interp_op ctxt ctx o with
   | Some m => m
   | None => Mret type_inhabited
@@ -210,18 +213,98 @@ Fixpoint interp_bindings (ctxt : type) (ctx : interp_type ctxt)
           (fun x => interp_bindings (op_type o * ctxt) (x, ctx) p tk k)
   end.
 
-Definition interp_expr (ctxt : type) (ctx : interp_type ctxt)
-           (e : expr) : M (expr_type e) :=
+Definition interp_expr ctxt ctx e : M (expr_type e) :=
   let '(p, o) := e in
   interp_bindings ctxt ctx p (op_type o)
                   (fun ctxt ctx => interp_op_silent ctxt ctx o).
 
-Lemma Mequiv_Mbind (t1 t2 : type)
+Definition interp_expr_cast ctxt ctx e t : M t :=
+  Mbind (interp_expr ctxt ctx e)
+        (fun x => Mret (cast t x)).
+
+Lemma Mequiv_Mbind {t1 t2 : type}
       (c1 c1' : M t1) (c2 c2' : interp_type t1 -> M t2) :
   Mequiv c1 c1' ->
   (forall x, Mequiv (c2 x) (c2' x)) ->
   Mequiv (Mbind c1 c2) (Mbind c1' c2').
 Proof. cbv [Mequiv Mbind]; intros; eapply Proper_Bind; eauto. Qed.
+
+Lemma Mbind_Mret_l {t1 t2} x (f : interp_type t1 -> M t2) :
+  Mequiv (Mbind (Mret x) f) (f x).
+Proof. eapply Bind_Ret_l. Qed.
+
+Lemma Mbind_Mret_r {t} (x : M t) : Mequiv (Mbind x Mret) x.
+Proof. eapply Bind_Ret_r. Qed.
+
+Lemma transport_same {P t} (x : P t) : transport t x = Some x.
+Proof.
+  cbv [transport eq_rect_r]; destruct (type_dec t t); try congruence.
+  cbv [eq_rect_r]. rewrite <-eq_rect_eq_dec; eauto using type_dec.
+Qed.
+
+Lemma cast_same {t} (x : interp_type t) : cast t x = x.
+Proof. cbv [cast]; rewrite transport_same; eauto. Qed.
+
+Lemma interp_expr_cast_expr_type ctxt ctx e :
+  Mequiv (interp_expr_cast ctxt ctx e (expr_type e))
+         (interp_expr ctxt ctx e).
+Proof.
+  cbv [interp_expr_cast].
+  setoid_rewrite <-(Mbind_Mret_r (interp_expr ctxt ctx e)) at 2.
+  eapply Mequiv_Mbind; [reflexivity|intros x].
+  rewrite cast_same; reflexivity.
+Qed.
+
+Lemma transport_different {P t u} (x : P t) : u <> t -> transport u x = None.
+Proof.
+  intros; cbv [transport eq_rect_r]; destruct (type_dec t u); congruence.
+Qed.
+
+Lemma cast_different {t u} (x : interp_type t) :
+  u <> t -> cast u x = type_inhabited.
+Proof. intros; cbv [cast]; rewrite transport_different; eauto. Qed.
+
+Lemma Mbind_unused {t1 t2} (a : M t1) (b : M t2) :
+  Mequiv (Mbind a (fun _ => b)) b.
+Proof. eapply Bind_unused. Qed.
+
+Lemma interp_expr_cast_different ctxt ctx e t :
+  t <> expr_type e ->
+  Mequiv (interp_expr_cast ctxt ctx e t)
+         (Mret type_inhabited).
+Proof.
+  intros; cbv [interp_expr_cast].
+  setoid_rewrite <-(Mbind_unused (interp_expr ctxt ctx e)
+                                 (Mret type_inhabited)).
+  eapply Mequiv_Mbind; [reflexivity|intros x].
+  rewrite cast_different by eauto; reflexivity.
+Qed.
+
+Definition equiv_under ctxt ctx e1 e2 :=
+  forall t, Mequiv (interp_expr_cast ctxt ctx e1 t)
+                   (interp_expr_cast ctxt ctx e2 t).
+
+Definition equiv e1 e2 := forall ctxt ctx, equiv_under ctxt ctx e1 e2.
+Lemma equiv_relevant_types ctxt ctx (e1 e2 : expr) :
+  equiv_under ctxt ctx e1 e2 <->
+  (Mequiv (interp_expr ctxt ctx e1)
+          (interp_expr_cast ctxt ctx e2 _) /\
+   Mequiv (interp_expr_cast ctxt ctx e1 _)
+          (interp_expr ctxt ctx e2)).
+Proof.
+  setoid_rewrite <-interp_expr_cast_expr_type.
+  split; [solve [eauto]|].
+  intros H t.
+  destruct (type_dec t (expr_type e1)); [solve [subst; intuition idtac]|].
+  destruct (type_dec t (expr_type e2)); [solve [subst; intuition idtac]|].
+  setoid_rewrite interp_expr_cast_different; eauto; reflexivity.
+Qed.
+
+Local Instance equiv_equiv : Equivalence equiv.
+Proof.
+  split; cbv [equiv equiv_under Reflexive Symmetric Transitive];
+    [reflexivity|symmetry; eauto|etransitivity; eauto].
+Qed.
 
 Lemma interp_bindings_app ctxt (ctx : interp_type ctxt)
       (p1 p2 : list operation) tk (k : forall ctxt, interp_type ctxt -> M tk) :
@@ -803,12 +886,26 @@ Section ExampleCoins.
   Definition example_coin_lemma_rhs :=
     ((op_unit :: nil), op_app coin (ref_index 0)).
 
-  Lemma example_coin_lemma :
-    forall ctxt ctx,
-      Comp_eq (interp_expr ctxt ctx example_coin_lemma_lhs)
-              (interp_expr ctxt ctx example_coin_lemma_rhs).
+  Lemma equiv_under_same_type ctxt ctx e1 e2 :
+    expr_type e1 = expr_type e2 ->
+    Mequiv (interp_expr ctxt ctx e1)
+           (interp_expr_cast ctxt ctx e2 _) ->
+    equiv_under ctxt ctx e1 e2.
   Proof.
+    setoid_rewrite <-interp_expr_cast_expr_type.
+    cbv [equiv_under].
     intros.
+    destruct (type_dec t (expr_type e1)).
+    - subst; eauto.
+    - setoid_rewrite interp_expr_cast_different; try congruence.
+      reflexivity.
+  Qed.
+
+  Lemma example_coin_lemma :
+    equiv example_coin_lemma_lhs example_coin_lemma_rhs.
+  Proof.
+    intros ??.
+    eapply equiv_under_same_type; eauto.
     cbv -[Comp_eq interp_const interp_retconst];
       cbn [interp_const interp_retconst].
     repeat (setoid_rewrite Bind_Ret_l || setoid_rewrite <-Bind_assoc).
@@ -825,7 +922,7 @@ Section ExampleCoins.
         reflexivity.
   Qed.
 
-  Example coins_example :=
+  Definition coins_example :=
     (op_unit
        :: op_app coin (ref_index 0)
        :: op_unit :: op_app coin (ref_index 0)
@@ -837,11 +934,11 @@ Section ExampleCoins.
        (ref_pair (ref_pair (ref_index 0) (ref_index 3)) (ref_index 3))).
 
   Derive coins_endpoint
-         SuchThat (forall ctxt ctx,
-                      (Mequiv (interp_expr ctxt ctx coins_example)
-                              (interp_expr ctxt ctx coins_endpoint)))
+         SuchThat (equiv coins_example coins_endpoint)
          As coins_example_rewrite.
-  (* FIXME need a transport to avoid unifying the two exprs via their types *)
-  Fail let x := (eval cbv [coins_endpoint] in coins_endpoint) in is_evar x.
+  Proof.
+    cbv [coins_example].
+    pose proof example_coin_lemma as L;
+      cbv [example_coin_lemma_lhs example_coin_lemma_rhs] in L.
   Abort.
 End ExampleCoins.

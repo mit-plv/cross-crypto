@@ -124,254 +124,187 @@ Local Notation "f @ g" := (bcompose f%box g%box)
                             (right associativity,
                              at level 41) : box_scope.
 
-Fixpoint size (t : type) : nat :=
-  match t with
-  | tprod t1 t2 => S (size t1 + size t2)
-  | _ => 1
+Inductive box_erase : Type :=
+| ebconst (t1 t2 : type) : box_const t1 t2 -> box_erase
+| eid (t : type) : box_erase
+| eassoc (t1 t2 t3 : type) : box_erase
+| eiassoc (t1 t2 t3 : type) : box_erase
+| eunit_l (t : type) : box_erase
+| eiunit_l (t : type) : box_erase
+| eunit_r (t : type) : box_erase
+| eiunit_r (t : type) : box_erase
+| ecopy (t : type) : box_erase
+| edelete (t : type) : box_erase
+| eswap (t1 t2 : type) : box_erase
+| ebcompose (t1 t2 t3 : type) : box_erase -> box_erase -> box_erase
+| ebtensor (t1 t1' t2 t2' : type) :
+    box_erase -> box_erase -> box_erase.
+
+Fixpoint box_box_erase {t1 t2} (b : box t1 t2) : box_erase :=
+  match b with
+  | @bconst t1 t2 c => ebconst t1 t2 c
+  | @id t => eid t
+  | @assoc t1 t2 t3 => eassoc t1 t2 t3
+  | @iassoc t1 t2 t3 => eiassoc t1 t2 t3
+  | @unit_l t => eunit_l t
+  | @iunit_l t => eiunit_l t
+  | @unit_r t => eunit_r t
+  | @iunit_r t => eiunit_r t
+  | @copy t => ecopy t
+  | @delete t => edelete t
+  | @swap t1 t2 => eswap t1 t2
+  | @bcompose t1 t2 t3 b1 b2 => ebcompose t1 t2 t3 (box_box_erase b1) (box_box_erase b2)
+  | @btensor t1 t1' t2 t2' b b' => ebtensor t1 t1' t2 t2' (box_box_erase b) (box_box_erase b')
   end.
 
-Lemma bconst_eq_inv {t1 t2 : type} (b b' : box_const t1 t2) :
-  bconst b = bconst b' ->
+Definition box_erase_box (u1 u2 : type) (b : box_erase) : option (box u1 u2).
+  revert u1 u2; induction b; intros u1 u2.
+  - (* bconst *)
+    destruct (type_dec t1 u1); [|exact None].
+    destruct (type_dec t2 u2); [|exact None].
+    subst; refine (Some (bconst _)); eauto.
+  - (* id *)
+    destruct (type_dec t u1); [|exact None].
+    destruct (type_dec t u2); [|exact None].
+    subst; refine (Some id).
+  - (* assoc *)
+    destruct (type_dec ((t1 * t2) * t3) u1); [|exact None].
+    destruct (type_dec (t1 * (t2 *t3)) u2); [|exact None].
+    subst; refine (Some assoc).
+  - (* iassoc *)
+    destruct (type_dec (t1 * (t2 *t3)) u1); [|exact None].
+    destruct (type_dec ((t1 * t2) * t3) u2); [|exact None].
+    subst; refine (Some iassoc).
+  - (* unit_l *)
+    destruct (type_dec (tunit * t) u1); [|exact None].
+    destruct (type_dec t u2); [|exact None].
+    subst; refine (Some unit_l).
+  - (* iunit_l *)
+    destruct (type_dec t u1); [|exact None].
+    destruct (type_dec (tunit * t) u2); [|exact None].
+    subst; refine (Some iunit_l).
+  - (* unit_r *)
+    destruct (type_dec (t * tunit) u1); [|exact None].
+    destruct (type_dec t u2); [|exact None].
+    subst; refine (Some unit_r).
+  - (* iunit_r *)
+    destruct (type_dec t u1); [|exact None].
+    destruct (type_dec (t * tunit) u2); [|exact None].
+    subst; refine (Some iunit_r).
+  - (* copy *)
+    destruct (type_dec t u1); [|exact None].
+    destruct (type_dec (t * t) u2); [|exact None].
+    subst; refine (Some copy).
+  - (* delete *)
+    destruct (type_dec t u1); [|exact None].
+    destruct (type_dec tunit u2); [|exact None].
+    subst; refine (Some delete).
+  - (* swap *)
+    destruct (type_dec (t1 * t2) u1); [|exact None].
+    destruct (type_dec (t2 * t1) u2); [|exact None].
+    subst; refine (Some swap).
+  - (* bcompose *)
+    destruct (type_dec t1 u1); [|exact None].
+    destruct (type_dec t3 u2); [|exact None].
+    destruct (IHb1 t1 t2); [|exact None].
+    destruct (IHb2 t2 t3); [|exact None].
+    subst; refine (Some (bcompose _ _)); eauto.
+  - (* btensor *)
+    destruct (type_dec (t1 * t1') u1); [|exact None].
+    destruct (type_dec (t2 * t2') u2); [|exact None].
+    destruct (IHb1 t1 t2); [|exact None].
+    destruct (IHb2 t1' t2'); [|exact None].
+    subst; refine (Some (btensor _ _)); eauto.
+Defined.
+
+Lemma type_dec_refl t : type_dec t t = left eq_refl.
+Proof.
+  destruct (type_dec t t); try congruence.
+  pattern e; eapply K_dec_type; eauto using type_dec.
+Qed.
+
+Lemma box_erase_almost_retraction {t1 t2} (b : box t1 t2) :
+  box_erase_box t1 t2 (box_box_erase b) = (Some b).
+Proof.
+  induction b; cbn [box_erase_box box_box_erase box_erase_rec box_erase_rect]; repeat rewrite type_dec_refl; try reflexivity.
+  - fold (box_erase_box t1 t2 (box_box_erase b1)).
+    fold (box_erase_box t2 t3 (box_box_erase b2)).
+    rewrite IHb1, IHb2.
+    reflexivity.
+  - fold (box_erase_box t1 t2 (box_box_erase b1)).
+    fold (box_erase_box t1' t2' (box_box_erase b2)).
+    rewrite IHb1, IHb2.
+    reflexivity.
+Qed.
+
+Lemma ebconst_eq_inv {t1 t2 : type} (b b' : box_const t1 t2) :
+  ebconst t1 t2 b = ebconst t1 t2 b' ->
   existT (fun '(t1, t2) => box_const t1 t2 : Type)
          (t1, t2) b =
   existT (fun '(t1, t2) => box_const t1 t2 : Type)
          (t1, t2) b'.
 Proof.
   intros.
-  set (f (e : box t1 t2) :=
+  set (f (e : box_erase) :=
          match e with
-         | @bconst t1 t2 b => existT _ (t1, t2) b
+         | ebconst t1 t2 b => existT _ (t1, t2) b
          | _ => existT (fun '(t1, t2) => box_const t1 t2) (t1, t2) b
          end).
-  change (f (bconst b) = f (bconst b')).
+  change (f (ebconst t1 t2 b) = f (ebconst t1 t2 b')).
   f_equal; eauto.
 Defined.
 
-Lemma bcompose_eq_inv {t1 t2 t2' t3 : type}
-      (b1 : box t1 t2) (b2 : box t2 t3)
-      (b1' : box t1 t2') (b2' : box t2' t3)  :
-  bcompose b1 b2 = bcompose b1' b2' ->
-  existT (fun '(t1, t2) => box t1 t2 : Type)
-         (t1, t2) b1 =
-  existT (fun '(t1, t2) => box t1 t2 : Type)
-         (t1, t2') b1' /\
-  existT (fun '(t1, t2) => box t1 t2 : Type)
-         (t2, t3) b2 =
-  existT (fun '(t1, t2) => box t1 t2 : Type)
-         (t2', t3) b2'.
+Ltac fequal_type_dec_left :=
+  let H := fresh in
+  eenough ({_} + {_}) as H by
+        (destruct H as [H|H]; [left; f_equal|right; exact H];
+         [ > repeat match type of H with
+                    | _ /\ _ => destruct H as [_ H]
+                    end; eapply (proj1 H) .. ]);
+  repeat multimatch goal with
+         | |- context[?t1 = ?t2] =>
+           lazymatch t2 with
+           | t1 => fail
+           | _ => idtac
+           end;
+           destruct (type_dec t1 t2); [subst t1|right; congruence]
+         end.
+
+Lemma box_erase_dec (b b' : box_erase) : {b = b'} + {b <> b'}.
 Proof.
-  intros.
-  set (f (e : box t1 t3) :=
-         match e with
-         | @bcompose t1 t2 t3 b1 b2 => existT _ (t1, t2) b1
-         | _ => existT (fun '(t1, t2) => box t1 t2) (t1, t2) b1
-         end).
-  set (g (e : box t1 t3) :=
-         match e with
-         | @bcompose t1 t2 t3 b1 b2 => existT _ (t2, t3) b2
-         | _ => existT (fun '(t1, t2) => box t1 t2) (t2, t3) b2
-         end).
-  split.
-  - change (f (bcompose b1 b2) = f (bcompose b1' b2')).
-    f_equal; eauto.
-  - change (g (bcompose b1 b2) = g (bcompose b1' b2')).
-    f_equal; eauto.
-Defined.
-
-Lemma btensor_eq_inv {t1 t1' t2 t2' : type}
-      (b1 b1' : box t1 t2) (b2 b2' : box t1' t2') :
-  btensor b1 b2 = btensor b1' b2' ->
-  existT (fun '(t1, t2) => box t1 t2 : Type)
-         (t1, t2) b1 =
-  existT (fun '(t1, t2) => box t1 t2 : Type)
-         (t1, t2) b1' /\
-  existT (fun '(t1, t2) => box t1 t2 : Type)
-         (t1', t2') b2 =
-  existT (fun '(t1, t2) => box t1 t2 : Type)
-         (t1', t2') b2'.
-Proof.
-  intros.
-  set (f (e : box (t1 * t1') (t2 * t2')) :=
-         match e with
-         | @btensor t1 t1' t2 t2' b1 b2 => existT _ (t1, t2) b1
-         | _ => existT (fun '(t1, t2) => box t1 t2) (t1, t2) b1
-         end).
-  set (g (e : box (t1 * t1') (t2 * t2')) :=
-         match e with
-         | @btensor t1 t1' t2 t2' b1 b2 => existT _ (t1', t2') b2
-         | _ => existT (fun '(t1, t2) => box t1 t2) (t1', t2') b2
-         end).
-  split.
-  - change (f (btensor b1 b2) = f (btensor b1' b2')).
-    f_equal; eauto.
-  - change (g (btensor b1 b2) = g (btensor b1' b2')).
-    f_equal; eauto.
-Defined.
-
-Ltac disprove_recursion :=
-  multimatch goal with
-  | H : ?a = _ |- _ =>
-    apply (f_equal size) in H;
-    cbn [size] in H;
-    omega
-  end.
-
-(* TODO Maybe possible to improve this proof by injecting into a version
-   with type-codes erased and showing a partial retraction? *)
-Definition box_sigT_dec {t1 t2 t1' t2'} (b : box t1 t2)
-           (b' : box t1' t2') :
-  let P := fun '(t1, t2) => box t1 t2 : Type in
-  {existT P (t1, t2) b = existT P (t1', t2') b'} +
-  {existT P (t1, t2) b <> existT P (t1', t2') b'}.
-  intros.
-
-  revert t1' t2' b'.
-  induction b; intros ? ? b'; destruct b';
-    try solve [right;
-               intro;
-               inversion_sigma;
-               match goal with
-               | H : (_, _) = (_, _) |- _ => inversion H
-               end;
-               repeat match goal with
-                      | H : ?x = ?y |- _ => type_head x;
-                                            type_head y;
-                                            inversion H;
-                                            clear H
-                      end;
-               try disprove_recursion;
-               subst;
-               rewrite <- eq_rect_eq_dec in * by
-                   (decide equality; eauto using type_dec);
-               congruence];
-    match goal with
-    | |- {existT _ (?t1, ?t2) _ =
-          existT _ (?t1', ?t2') _} + {_} =>
-      destruct (type_dec t1 t1') as [e1|?];
-        [|right; intro; inversion_sigma; congruence];
-        inversion e1; subst;
-          solve [eauto] ||
-                (destruct (type_dec t2 t2') as [e2|?];
-                 [|right; intro; inversion_sigma; congruence];
-                 inversion e2; subst; eauto)
-    end.
-  - destruct (box_const_dec b b0). (* TODO name *)
-    + subst; eauto.
-    + right.
-      intro.
-      inversion_sigma.
-      match goal with
-      | H : (_, _) = (_, _) |- _ => inversion H
-      end.
-      subst.
-      rewrite <- eq_rect_eq_dec in * by
-          (decide equality; eauto using type_dec).
-      match goal with
-      | H : bconst _ = bconst _ |- _ => apply bconst_eq_inv in H
-      end.
-      inversion_sigma.
-      rewrite <- eq_rect_eq_dec in * by
-          (decide equality; eauto using type_dec).
-      congruence.
-  - destruct (IHb1 _ _ b'1). (* TODO name *)
-    + destruct (IHb2 _ _ b'2). (* TODO name *)
-      * inversion_sigma.
-        match goal with
-        | H : (_, _) = (_, _) |- _ => inversion H
-        end.
-        subst.
-        repeat rewrite <- eq_rect_eq_dec in * by
-            (decide equality; eauto using type_dec).
-        eauto.
-      * right.
-        intro.
-        inversion_sigma.
-        match goal with
-        | H : (_, _) = (_, _) |- _ => inversion H
-        end.
-        rewrite <- eq_rect_eq_dec in * by
-            (decide equality; eauto using type_dec).
-        match goal with
-        | H : bcompose _ _ = bcompose _ _ |- _ => apply bcompose_eq_inv in H;
-                                                    destruct H
-        end.
-        inversion_sigma.
-        subst.
-        rewrite <- eq_rect_eq_dec in * by
-            (decide equality; eauto using type_dec).
-        congruence.
-    + right.
-      intro.
-      inversion_sigma.
-      match goal with
-      | H : (_, _) = (_, _) |- _ => inversion H
-      end.
-      rewrite <- eq_rect_eq_dec in * by
-          (decide equality; eauto using type_dec).
-      match goal with
-      | H : bcompose _ _ = bcompose _ _ |- _ => apply bcompose_eq_inv in H;
-                                                  destruct H
-      end.
-      inversion_sigma.
-      inversion H4. (* TODO naming *)
-      subst.
-      rewrite <- eq_rect_eq_dec in * by
-          (decide equality; eauto using type_dec).
-      congruence.
-  - destruct (IHb1 _ _ b'1). (* TODO name *)
-    + destruct (IHb2 _ _ b'2). (* TODO name *)
-      * inversion_sigma.
-        match goal with
-        | H : (_, _) = (_, _) |- _ => inversion H
-        end.
-        subst.
-        repeat rewrite <- eq_rect_eq_dec in * by
-            (decide equality; eauto using type_dec).
-        eauto.
-      * right.
-        intro.
-        inversion_sigma.
-        match goal with
-        | H : (_, _) = (_, _) |- _ => inversion H
-        end.
-        rewrite <- eq_rect_eq_dec in * by
-            (decide equality; eauto using type_dec).
-        match goal with
-        | H : btensor _ _ = btensor _ _ |- _ => apply btensor_eq_inv in H;
-                                                  destruct H
-        end.
-        inversion_sigma.
-        subst.
-        rewrite <- eq_rect_eq_dec in * by
-            (decide equality; eauto using type_dec).
-        congruence.
-    + right.
-      intro.
-      inversion_sigma.
-      match goal with
-      | H : (_, _) = (_, _) |- _ => inversion H
-      end.
-      rewrite <- eq_rect_eq_dec in * by
-          (decide equality; eauto using type_dec).
-      match goal with
-      | H : btensor _ _ = btensor _ _ |- _ => apply btensor_eq_inv in H;
-                                                destruct H
-      end.
-      inversion_sigma.
-      subst.
-      rewrite <- eq_rect_eq_dec in * by
-          (decide equality; eauto using type_dec).
-      congruence.
+  revert b'; induction b;
+    intros [u1 u2 b' | | | | | | | | | | | ??? b1' b2' | ???? b1' b2' ];
+    try (right; congruence);
+    try solve
+        [fequal_type_dec_left; left; intuition idtac; exact I].
+  - destruct (type_dec t1 u1); [subst|right; congruence].
+    destruct (type_dec t2 u2); [subst|right; congruence].
+    destruct (box_const_dec b b');
+      [subst|
+       right;
+       intro H;
+       eapply ebconst_eq_inv in H;
+       inversion_sigma;
+       rewrite <- eq_rect_eq_dec in * by
+           (decide equality; eauto using type_dec); congruence].
+    eauto.
+  - fequal_type_dec_left.
+    destruct (IHb1 b1'); [subst|right; congruence].
+    destruct (IHb2 b2'); [subst|right; congruence].
+    left; intuition idtac; exact I.
+  - fequal_type_dec_left.
+    destruct (IHb1 b1'); [subst|right; congruence].
+    destruct (IHb2 b2'); [subst|right; congruence].
+    left; intuition idtac; exact I.
 Defined.
 
 Lemma box_dec t1 t2 (b1 b2 : box t1 t2) : {b1 = b2} + {b1 <> b2}.
 Proof.
-  destruct (box_sigT_dec b1 b2).
-  - inversion_sigma.
-    subst.
-    rewrite <- eq_rect_eq_dec in * by
-        (decide equality; eauto using type_dec).
-    eauto.
+  destruct (box_erase_dec (box_box_erase b1) (box_box_erase b2)) as [e|].
+  - left.
+    eapply (@f_equal _ _ (box_erase_box t1 t2)) in e.
+    repeat rewrite box_erase_almost_retraction in e.
+    inversion e; eauto.
   - right; congruence.
 Defined.
 

@@ -8,8 +8,8 @@ Require Import Coq.Init.Wf.
 Require Import Coq.Relations.Relations.
 Require Import Coq.Wellfounded.Transitive_Closure.
 Require Import Coq.Wellfounded.Lexicographic_Product.
-
 Require Import Coq.btauto.Btauto.
+
 Lemma eqb_bool a b : (a ?= b) = negb (xorb a b).
 Proof.
   destruct a; destruct b;
@@ -721,15 +721,7 @@ Section Language.
           as E.
         {
           intros.
-          assert (forall xy,
-                     Comp_eq (ret negb (fst xy ?= snd xy))
-                             (ret negb (snd xy ?= fst xy))) as E1.
-          {
-            intros.
-            setoid_rewrite eqb_symm at 2.
-            reflexivity.
-          }
-          setoid_rewrite E1 at 2; clear E1.
+          setoid_rewrite eqb_symm at 2.
           eapply swapcomp_compat with (f := fun x y => ret negb (x ?= y)).
         }
         setoid_rewrite E; clear E.
@@ -780,13 +772,10 @@ Section Language.
       (vfalse eta ?= vtrue eta) = false.
     Proof.
       eapply eqb_false_iff.
-      intro.
-      assert (false = true).
-      {
-        rewrite <- inspect_vfalse with (eta := eta).
-        rewrite <- inspect_vtrue with (eta := eta).
-        f_equal; eauto.
-      }
+      intros H;
+        apply f_equal with (f := inspect_vbool) in H;
+        revert H.
+      rewrite inspect_vfalse, inspect_vtrue.
       congruence.
     Qed.
 
@@ -810,6 +799,7 @@ Section Language.
             universal_security_game adl adv dst eta in
     |Pr[game e] - Pr[game (expr_const vtrue)]|
     <= Pr[whp_game adl adv eta e].
+    Proof.
       intros adl adv dst eta e.
       cbv [universal_security_game whp_game interp].
       cbn [interp_fixed].
@@ -827,14 +817,14 @@ Section Language.
                 ret (x, y))).
       set (Z := dst eta).
 
-      cut (|Pr [er <-$ ER;
-                x <-$ XR er;
-                ret Z er x] -
-            Pr [er <-$ ER; y <-$ Y'; ret Z er y]|
-           <=
-           Pr [er <-$ ER;
-               x <-$ XR er;
-               ret negb (inspect_vbool x)]); try solve [intuition].
+      enough (|Pr [er <-$ ER;
+                   x <-$ XR er;
+                   ret Z er x] -
+               Pr [er <-$ ER; y <-$ Y'; ret Z er y]|
+              <=
+              Pr [er <-$ ER;
+                  x <-$ XR er;
+                  ret negb (inspect_vbool x)]) by (intuition idtac).
 
       assert (forall er,
                  Comp_eq

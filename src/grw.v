@@ -1,6 +1,7 @@
 Require Import Coq.Classes.Morphisms.
 Require Import Coq.Logic.Eqdep_dec.
 Require Import Coq.derive.Derive.
+Require Import Coq.Strings.String.
 
 Require Import FCF.FCF FCF.EqDec.
 Close Scope rat_scope.
@@ -8,6 +9,7 @@ Close Scope vector_scope.
 
 Require Import CrossCrypto.RewriteUtil.
 Require Import CrossCrypto.ListUtil.
+Require CrossCrypto.fmap.list_of_pairs.
 
 
 Inductive type : Set :=
@@ -18,6 +20,25 @@ Inductive type : Set :=
 
 Lemma type_dec (t1 t2 : type) : {t1 = t2} + {t1 <> t2}.
 Proof. decide equality. Defined.
+
+Fixpoint type_eqb (t1 t2 : type) : bool :=
+  match t1, t2 with
+  | tunit, tunit => true
+  | tnat, tnat => true
+  | tbool, tbool => true
+  | tprod t1a t1b, tprod t2a t2b => andb (type_eqb t1a t2a) (type_eqb t1b t2b)
+  | _, _ => false
+  end.
+Lemma type_eqb_eq t1 t2 : type_eqb t1 t2 = true <-> t1 = t2.
+Proof.
+  split.
+  - revert t2; induction t1; destruct t2; cbn [type_eqb];
+      intuition (try congruence).
+    rewrite andb_true_iff in *;
+      erewrite IHt1_1, IHt1_2; intuition eauto.
+  - intros; subst t2; induction t1; cbn [type_eqb]; try congruence.
+    rewrite andb_true_iff; intuition congruence.
+Qed.
 
 Bind Scope etype_scope with type.
 Delimit Scope etype_scope with etype.
@@ -69,6 +90,13 @@ Inductive const : Type :=
 Lemma const_dec (c1 c2 : const) : {c1 = c2} + {c1 <> c2}.
 Proof. decide equality. Defined.
 
+Definition const_eqb (c1 c2 : const) : bool :=
+  match c1, c2 with
+  | coin, coin => true
+  end.
+Lemma const_eqb_eq (c1 c2 : const) : const_eqb c1 c2 = true <-> c1 = c2.
+Proof. destruct c1, c2; intuition eauto. Qed.
+
 Definition cdom c : type :=
   match c with
   | coin => tunit
@@ -91,6 +119,19 @@ Inductive ret_const : Type :=
 
 Lemma retconst_dec (c1 c2 : ret_const) : {c1 = c2} + {c1 <> c2}.
 Proof. repeat decide equality. Defined.
+
+Definition retconst_eqb (c c' : ret_const) : bool :=
+  match c, c' with
+  | xor', xor' => true
+  | zero, zero => true
+  | id t1, id t2 => type_eqb t1 t2
+  | _, _ => false
+  end.
+Lemma retconst_eqb_eq c1 c2 : retconst_eqb c1 c2 = true <-> c1 = c2.
+Proof.
+  destruct c1, c2; cbv [retconst_eqb]; rewrite ?type_eqb_eq;
+    intuition congruence.
+Qed.
 
 Definition rcdom c : type :=
   match c with
@@ -866,14 +907,6 @@ Proof.
   eapply IHp; eauto.
 Qed.
 
-(* TODO:
- * - matching algorithm
- * - matching rewrite
- * - reification
- * - support for retconst
- *   - duplicating/deduplicating rets
- *)
-
 Section ExampleCoins.
   Definition example_coin_lemma_lhs :=
     (op_unit
@@ -940,5 +973,151 @@ Section ExampleCoins.
     cbv [coins_example].
     pose proof example_coin_lemma as L;
       cbv [example_coin_lemma_lhs example_coin_lemma_rhs] in L.
+
   Abort.
 End ExampleCoins.
+
+Module Rewriter.
+  Inductive error :=
+  | E_todo (_ : string)
+  | E_msg (_ : string).
+  Local Notation ok := inl.
+  Local Notation raise := inr.
+  Definition err_bind {t1 t2} (a : t1 + error) (b : t1 -> t2 + error)
+    : t2 + error :=
+    match a with
+    | ok x => b x
+    | raise e => raise e
+    end.
+  Local Notation "x <-! a ; b" := (err_bind a (fun x => b))
+                                    (at level 100).
+  Local Notation "' x <-! a ; b" := (err_bind a (fun 'x => b))
+                                      (x strict pattern, at level 100).
+
+  Section WithMap.
+    Context (map_operations : fmap.operations nat nat).
+    Local Notation map := (map_operations.(fmap.M)).
+    Local Notation empty := (map_operations.(fmap.empty)).
+    Local Notation add := (map_operations.(fmap.add)).
+    Local Notation find := (map_operations.(fmap.find)).
+
+    Definition op_matches (o1 o2 : operation) :=
+      match o1, o2 with
+      | op_unit, op_unit => true
+      | op_app c _, op_app c' _ =>
+        if const_eqb c c' then true else false
+      | op_retapp c _, op_retapp c' _ =>
+        if retconst_eqb c c' then true else false
+      | _, _ => false
+      end.
+
+    (* TODO
+   - matching rewrite
+     + (normalize lemma by removing any unused bindings)
+     + find a match (inverse maps which line up program and lemma)
+     + generate a sequence of swaps
+     + either:
+       * check the legality of the swaps relative to the initial
+         (or maybe final) version somehow
+       * compose the swaps into a permutation
+       * rewrite with the permutation
+       * prove that you get the same answer as a sequence of swaps
+     + or:
+       * just check and run the swaps individually
+     + run the strict matcher
+       (could prove that it always succeeds but that would be hard)
+     + rewrite the lemma
+   - reification
+     + reify to PHOAS first, then to flat structure
+   - support for ret
+     + duplicating/deduplicating rets
+   - support for free variables
+     + need to renumber them on both sides of the lemma to match the
+       program
+   - support for unused bindings
+     *)
+
+    Definition update_maps_ind (lem2prog prog2lem : map) (li pi : nat)
+      : map * map + error :=
+      match find li lem2prog with
+      | Some pi' => if pi =? pi'
+                    then ok (lem2prog, prog2lem)
+                    else raise (E_msg "lem2prog mismatch")
+      | None =>
+        let lem2prog := add li pi lem2prog in
+        match find pi prog2lem with
+        | Some li' => if li =? li'
+                      then ok (lem2prog, prog2lem)
+                      else raise (E_msg "prog2lem mismatch")
+        | None =>
+          let prog2lem := add pi li prog2lem in
+          ok (prog2lem, lem2prog)
+        end
+      end.
+
+    Fixpoint update_maps_ref (loff poff : nat) (lem2prog prog2lem : map)
+             (lr pr : ref) {struct lr} :
+      map * map + error :=
+      match lr, pr with
+      | ref_index ln, ref_index pn =>
+        update_maps_ind lem2prog prog2lem (loff + ln) (poff + pn)
+      | ref_pair lr1 lr2, ref_pair pr1 pr2 =>
+        '(lem2prog, prog2lem) <-!
+         update_maps_ref loff poff lem2prog prog2lem lr1 pr1;
+          update_maps_ref loff poff lem2prog prog2lem lr2 pr2
+      | _, _ => raise (E_msg "ref mismatch")
+      end.
+
+    Definition update_maps_op
+               (lop pop : operation)
+               (loff poff : nat) (lem2prog prog2lem : map)
+      : map * map + error :=
+      match lop, pop with
+      | op_unit, op_unit => ok (lem2prog, prog2lem)
+      | op_app lc lr, op_app pc pr =>
+        if const_eqb lc pc
+        then update_maps_ref loff poff lem2prog prog2lem lr pr
+        else raise (E_msg "op const mismatch")
+      | op_retapp lc lr, op_retapp pc pr =>
+        if retconst_eqb lc pc
+        then update_maps_ref loff poff lem2prog prog2lem lr pr
+        else raise (E_msg "op retconst mismatch")
+      | _, _ => raise (E_msg "operation mismatch")
+      end.
+
+    (* iterate over lbinds, using the map found so far to index into
+     * pbinds.  lbinds gets shorter, pbinds stays the same.
+     * The "empty lem2prog entry" error occurs if the lemma has unused
+     * bindings; "bad lem2prog entry" occurs if the program refers to a
+     * free variable but that variable is not free in the lemma. *)
+    Fixpoint find_match'
+             (lbinds pbinds : list operation) (lhead phead : operation)
+             (loff poff : nat) (lem2prog prog2lem : map) {struct lbinds}
+      : map * map + error :=
+      '(lem2prog, prog2lem) <-!
+       update_maps_op lhead phead loff poff lem2prog prog2lem;
+        match lbinds with
+        | nil => ok (lem2prog, prog2lem)
+        | cons lhead lbinds =>
+          match find loff lem2prog with
+          | Some pi =>
+            match List.nth_error pbinds pi with
+            | Some phead => find_match' lbinds pbinds
+                                        lhead phead
+                                        (S loff) (S pi)
+                                        lem2prog prog2lem
+            | None => raise (E_msg "bad lem2prog entry")
+            end
+          | None => raise (E_msg "empty lem2prog entry")
+          end
+        end.
+
+    (* binds and lbinds are in reversed order from their usual order in
+   expr.  returns lemma-to-program and program-to-lemma maps of de
+   Bruijn indices relative to the head
+     *)
+    Definition find_match (lbinds pbinds : list operation)
+               (lhead phead : operation) : map * map + error :=
+      find_match' lbinds pbinds lhead phead 0 0 empty empty.
+  End WithMap.
+End Rewriter.

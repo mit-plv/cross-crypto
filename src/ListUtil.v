@@ -32,16 +32,16 @@ Module Decompose.
   Section WithElementType.
     Context {A : Type}.
 
-    Fixpoint decompose_find' (f : nat -> A -> bool) i acc l {struct l} :
+    Fixpoint find' (f : nat -> A -> bool) i acc l {struct l} :
       option (list A * A * list A) :=
       match l with
       | nil => None
       | cons x l => if f i x
                     then Some (acc, x, l)
-                    else decompose_find' f (S i) (x :: acc) l
+                    else find' f (S i) (x :: acc) l
       end.
 
-    Definition decompose_find f l := decompose_find' f 0 nil l.
+    Definition find f l := find' f 0 nil l.
 
     Definition found f l a (x : A) b :=
       l = rev_append a (x :: b) /\ f (length a) x = true.
@@ -96,8 +96,8 @@ Module Decompose.
         right; eexists; crush.
     Qed.
 
-    Lemma decompose_find_spec f l :
-      match decompose_find f l with
+    Lemma find_spec f l :
+      match find f l with
       | Some (a, x, b) => found f l a x b /\
                           ~ exists c y d, found f (rev a) c y d
       | None => ~ exists a x b, found f l a x b
@@ -105,17 +105,17 @@ Module Decompose.
     Proof.
       enough (forall acc,
                  (~ exists a x b, found f (rev acc) a x b) ->
-                 match decompose_find' f (length acc) acc l with
+                 match find' f (length acc) acc l with
                  | Some (a, x, b) =>
                    found f (rev_append acc l) a x b /\
                    ~ exists c y d, found f (rev a) c y d
                  | None => ~ exists a x b, found f (rev_append acc l) a x b
                  end) as H.
       {
-        cbv [decompose_find].
+        cbv [find].
         specialize (H nil); cbn [rev length] in H.
         refine ((fun H' => ltac:(clear H)) (H _)).
-        - destruct (decompose_find' f 0 nil l) as [[[??]?]|];
+        - destruct (find' f 0 nil l) as [[[??]?]|];
             rewrite ?app_nil_r in H'; cbn [rev_append] in H'; intuition.
         - intros (?&?&?&Hnil).
           cbv [found rev] in Hnil.
@@ -123,7 +123,7 @@ Module Decompose.
           eapply app_cons_not_nil; intuition eauto.
       }
       induction l as [|y l];
-        intros acc Hacc; cbn [decompose_find' rev_append app].
+        intros acc Hacc; cbn [find' rev_append app].
       - rewrite rev_append_rev, app_nil_r; eauto.
       - cbv [found].
         remember (f (length acc) y) as b; destruct b;
@@ -136,20 +136,60 @@ Module Decompose.
         + eapply Hacc; do 3 eexists; intuition eauto.
     Qed.
 
-    Definition decompose_at l n : option (list A * list A) :=
-      match decompose_find (fun i _ => Nat.eqb i n) l with
+    Fixpoint find_all' (f : nat -> A -> bool)
+             i results prefix l {struct l} :
+      list (list A * A * list A) :=
+      match l with
+      | nil => results
+      | cons x l => find_all' f (S i)
+                                        (if f i x
+                                         then (prefix, x, l) :: results
+                                         else results)
+                                        (x :: prefix)
+                                        l
+      end.
+
+    Definition find_all f l := find_all' f 0 nil nil l.
+
+    Lemma find_all_correct f l :
+      Forall (fun '(a, x, b) => found f l a x b)
+             (find_all f l).
+    Proof.
+      enough (forall results prefix,
+                 Forall (fun '(a, x, b) => found f (rev_append prefix l)
+                                                 a x b)
+                        results ->
+                 Forall (fun '(a, x, b) => found f (rev_append prefix l)
+                                                 a x b)
+                        (find_all' f (length prefix)
+                                             results prefix l))
+             by (eapply (H nil nil); eapply Forall_nil).
+      induction l as [|y l]; cbn [find_all']; eauto.
+      intros.
+      eapply (IHl (if f (length prefix) y
+                   then (prefix, y, l) :: results
+                   else results)
+                  (y :: prefix)).
+      remember (f (length prefix) y) as fy.
+      destruct fy; eauto.
+      eapply Forall_cons; eauto.
+      cbv [found]; eauto.
+    Qed.
+
+    Definition index l n : option (list A * list A) :=
+      match find (fun i _ => Nat.eqb i n) l with
       | Some (a, x, b) => Some (a, x :: b)
       | None => None
       end.
 
-    Lemma decompose_at_correct l n : match decompose_at l n with
+    Lemma index_correct l n : match index l n with
                                      | Some (a, b) => l = rev_append a b
                                      | None => True
                                      end.
     Proof.
-      cbv [decompose_at].
-      pose proof (decompose_find_spec (fun i _ => Nat.eqb i n) l) as H.
-      destruct (decompose_find _ _) as [[[??]?]|];
+      cbv [index].
+      pose proof (find_spec (fun i _ => Nat.eqb i n) l) as H.
+      destruct (find _ _) as [[[??]?]|];
         cbv [found] in H;
         intuition idtac.
     Qed.

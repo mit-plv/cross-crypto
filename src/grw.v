@@ -341,6 +341,21 @@ Proof.
   setoid_rewrite interp_expr_cast_different; eauto; reflexivity.
 Qed.
 
+Lemma equiv_under_same_type ctxt ctx e1 e2 :
+  expr_type e1 = expr_type e2 ->
+  Mequiv (interp_expr ctxt ctx e1)
+         (interp_expr_cast ctxt ctx e2 _) ->
+  equiv_under ctxt ctx e1 e2.
+Proof.
+  setoid_rewrite <-interp_expr_cast_expr_type.
+  cbv [equiv_under].
+  intros.
+  destruct (type_dec t (expr_type e1)).
+  - subst; eauto.
+  - setoid_rewrite interp_expr_cast_different; try congruence.
+    reflexivity.
+Qed.
+
 Local Instance equiv_equiv : Equivalence equiv.
 Proof.
   split; cbv [equiv equiv_under Reflexive Symmetric Transitive];
@@ -907,7 +922,184 @@ Proof.
   eapply IHp; eauto.
 Qed.
 
+Module Rewriter.
+  Inductive error :=
+  | E_debug {t : Type} (_ : t)
+  | E_todo (_ : string)
+  | E_msg (_ : string)
+  (* returns a list of the offset of each match,
+   * along with the reason it failed *)
+  | E_all_matches_failed (_ : list (nat * error))
+  | E_no_matches.
+
+  Local Notation ok := inl.
+  Local Notation raise := inr.
+  Definition err_bind {t1 t2} (a : t1 + error) (b : t1 -> t2 + error)
+    : t2 + error :=
+    match a with
+    | ok x => b x
+    | raise e => raise e
+    end.
+  Local Notation "x <-! a ; b" := (err_bind a (fun x => b))
+                                    (at level 100).
+  Local Notation "' x <-! a ; b" := (err_bind a (fun 'x => b))
+                                      (x strict pattern, at level 100).
+
+  Section WithMap.
+    Context (map_operations : fmap.operations nat nat).
+    Local Notation map := (map_operations.(fmap.M)).
+    Local Notation empty := (map_operations.(fmap.empty)).
+    Local Notation add := (map_operations.(fmap.add)).
+    Local Notation find := (map_operations.(fmap.find)).
+
+    Definition op_matches (o1 o2 : operation) :=
+      match o1, o2 with
+      | op_unit, op_unit => true
+      | op_app c _, op_app c' _ =>
+        if const_eqb c c' then true else false
+      | op_retapp c _, op_retapp c' _ =>
+        if retconst_eqb c c' then true else false
+      | _, _ => false
+      end.
+
+    (* TODO
+     * - matching rewrite
+     *   + (normalize lemma by removing any unused bindings)
+     *   + find a match (inverse maps which line up program and lemma)
+     *   + generate a sequence of swaps
+     *   + either:
+     *     * check the legality of the swaps relative to the initial
+     *       (or maybe final) version somehow
+     *     * compose the swaps into a permutation
+     *     * rewrite with the permutation
+     *     * prove that you get the same answer as a sequence of swaps
+     *   + or:
+     *     * just check and run the swaps individually
+     *   + run the strict matcher
+     *     (could prove that it always succeeds but that would be hard)
+     *   + rewrite the lemma
+     * - reification
+     *   + reify to PHOAS first, then to flat structure
+     * - support for ret
+     *   + duplicating/deduplicating rets
+     * - support for free variables
+     *   + need to renumber them on both sides of the lemma to match the
+     *     program
+     * - support for unused bindings
+     *)
+
+    Definition update_maps_ind (lem2prog prog2lem : map) (li pi : nat)
+      : map * map + error :=
+      match find li lem2prog with
+      | Some pi' => if pi =? pi'
+                    then ok (lem2prog, prog2lem)
+                    else raise (E_msg "lem2prog mismatch")
+      | None =>
+        let lem2prog := add li pi lem2prog in
+        match find pi prog2lem with
+        | Some li' => if li =? li'
+                      then ok (lem2prog, prog2lem)
+                      else raise (E_msg "prog2lem mismatch")
+        | None =>
+          let prog2lem := add pi li prog2lem in
+          ok (lem2prog, prog2lem)
+        end
+      end.
+
+    Fixpoint update_maps_ref (loff poff : nat) (lem2prog prog2lem : map)
+             (lr pr : ref) {struct lr} :
+      map * map + error :=
+      match lr, pr with
+      | ref_index ln, ref_index pn =>
+        update_maps_ind lem2prog prog2lem (loff + ln) (poff + pn)
+      | ref_pair lr1 lr2, ref_pair pr1 pr2 =>
+        '(lem2prog, prog2lem) <-!
+         update_maps_ref loff poff lem2prog prog2lem lr1 pr1;
+          update_maps_ref loff poff lem2prog prog2lem lr2 pr2
+      | _, _ => raise (E_msg "ref mismatch")
+      end.
+
+    Definition update_maps_op
+               (lop pop : operation)
+               (loff poff : nat) (lem2prog prog2lem : map)
+      : map * map + error :=
+      match lop, pop with
+      | op_unit, op_unit => ok (lem2prog, prog2lem)
+      | op_app lc lr, op_app pc pr =>
+        if const_eqb lc pc
+        then update_maps_ref loff poff lem2prog prog2lem lr pr
+        else raise (E_msg "op const mismatch")
+      | op_retapp lc lr, op_retapp pc pr =>
+        if retconst_eqb lc pc
+        then update_maps_ref loff poff lem2prog prog2lem lr pr
+        else raise (E_msg "op retconst mismatch")
+      | _, _ => raise (E_msg "operation mismatch")
+      end.
+
+    (* iterate over lbinds, using the map found so far to index into
+     * pbinds.  lbinds gets shorter, pbinds stays the same.
+     * The "empty lem2prog entry" error occurs if the lemma has unused
+     * bindings; "bad lem2prog entry" occurs if the program refers to a
+     * free variable but that variable is not free in the lemma. *)
+    Fixpoint map_match'
+             (lbinds pbinds : list operation) (lhead phead : operation)
+             (loff poff : nat) (lem2prog prog2lem : map) {struct lbinds}
+      : map * map + error :=
+      '(lem2prog, prog2lem) <-!
+       update_maps_op lhead phead loff poff lem2prog prog2lem;
+        match lbinds with
+        | nil => ok (lem2prog, prog2lem)
+        | cons lhead lbinds =>
+          match find loff lem2prog with
+          | Some pi =>
+            match List.nth_error pbinds pi with
+            | Some phead => map_match' lbinds pbinds
+                                        lhead phead
+                                        (S loff) (S pi)
+                                        lem2prog prog2lem
+            | None => raise (E_msg "bad lem2prog entry")
+            end
+          | None => raise (E_msg "empty lem2prog entry")
+          end
+        end.
+
+    (* binds and lbinds are in reversed order from their usual order in
+     * expr.  returns lemma-to-program and program-to-lemma maps of de
+     * Bruijn indices relative to the head
+     *)
+    Definition map_match (lbinds pbinds : list operation)
+               (lhead phead : operation) : map * map + error :=
+      map_match' lbinds pbinds lhead phead 0 0 empty empty.
+
+    Definition find_match (lbinds prog : list operation)
+             (lhead : operation) :
+      ((list operation * operation * list operation) *
+       (map * map)) + error :=
+      let match_bases :=
+          Decompose.find_all (fun _ => op_matches lhead) prog in
+      _ <-! match match_bases return unit + error with
+            | nil => raise E_no_matches
+            | _ => ok tt
+            end;
+      (fix check_matches
+           (errs : list (nat * error))
+           (l : list (list operation * operation * list operation)) :=
+         match l with
+         | nil => raise (E_all_matches_failed errs)
+         | cons ((ptail, phead, pbinds) as loc) l =>
+           match map_match lbinds pbinds lhead phead with
+           | ok maps => ok (loc, maps)
+           | raise e =>
+             check_matches ((length pbinds, e) :: errs) l
+           end
+         end) nil match_bases.
+  End WithMap.
+End Rewriter.
+
 Section ExampleCoins.
+  Import CrossCrypto.fmap.list_of_pairs.
+  Local Notation map := (list_of_pairs Nat.eqb).
+
   Definition example_coin_lemma_lhs :=
     (op_unit
        :: op_unit
@@ -918,21 +1110,6 @@ Section ExampleCoins.
 
   Definition example_coin_lemma_rhs :=
     ((op_unit :: nil), op_app coin (ref_index 0)).
-
-  Lemma equiv_under_same_type ctxt ctx e1 e2 :
-    expr_type e1 = expr_type e2 ->
-    Mequiv (interp_expr ctxt ctx e1)
-           (interp_expr_cast ctxt ctx e2 _) ->
-    equiv_under ctxt ctx e1 e2.
-  Proof.
-    setoid_rewrite <-interp_expr_cast_expr_type.
-    cbv [equiv_under].
-    intros.
-    destruct (type_dec t (expr_type e1)).
-    - subst; eauto.
-    - setoid_rewrite interp_expr_cast_different; try congruence.
-      reflexivity.
-  Qed.
 
   Lemma example_coin_lemma :
     equiv example_coin_lemma_lhs example_coin_lemma_rhs.
@@ -973,151 +1150,18 @@ Section ExampleCoins.
     cbv [coins_example].
     pose proof example_coin_lemma as L;
       cbv [example_coin_lemma_lhs example_coin_lemma_rhs] in L.
+  Abort.
 
+  Goal False.
+    pose (rev (fst coins_example)) as prog; cbv in prog.
+
+    pose (hd op_unit (rev (fst coins_example))) as phead; cbv in phead.
+    pose (tl (rev (fst coins_example))) as pbinds; cbv in pbinds.
+    pose (rev (fst example_coin_lemma_lhs)) as lbinds; cbv in lbinds.
+    pose (snd example_coin_lemma_lhs) as lhead; cbv in lhead.
+
+    pose (Rewriter.map_match map lbinds pbinds lhead phead) as M; cbv in M.
+
+    pose (Rewriter.find_match map lbinds prog lhead) as F; cbv in F.
   Abort.
 End ExampleCoins.
-
-Module Rewriter.
-  Inductive error :=
-  | E_todo (_ : string)
-  | E_msg (_ : string).
-  Local Notation ok := inl.
-  Local Notation raise := inr.
-  Definition err_bind {t1 t2} (a : t1 + error) (b : t1 -> t2 + error)
-    : t2 + error :=
-    match a with
-    | ok x => b x
-    | raise e => raise e
-    end.
-  Local Notation "x <-! a ; b" := (err_bind a (fun x => b))
-                                    (at level 100).
-  Local Notation "' x <-! a ; b" := (err_bind a (fun 'x => b))
-                                      (x strict pattern, at level 100).
-
-  Section WithMap.
-    Context (map_operations : fmap.operations nat nat).
-    Local Notation map := (map_operations.(fmap.M)).
-    Local Notation empty := (map_operations.(fmap.empty)).
-    Local Notation add := (map_operations.(fmap.add)).
-    Local Notation find := (map_operations.(fmap.find)).
-
-    Definition op_matches (o1 o2 : operation) :=
-      match o1, o2 with
-      | op_unit, op_unit => true
-      | op_app c _, op_app c' _ =>
-        if const_eqb c c' then true else false
-      | op_retapp c _, op_retapp c' _ =>
-        if retconst_eqb c c' then true else false
-      | _, _ => false
-      end.
-
-    (* TODO
-   - matching rewrite
-     + (normalize lemma by removing any unused bindings)
-     + find a match (inverse maps which line up program and lemma)
-     + generate a sequence of swaps
-     + either:
-       * check the legality of the swaps relative to the initial
-         (or maybe final) version somehow
-       * compose the swaps into a permutation
-       * rewrite with the permutation
-       * prove that you get the same answer as a sequence of swaps
-     + or:
-       * just check and run the swaps individually
-     + run the strict matcher
-       (could prove that it always succeeds but that would be hard)
-     + rewrite the lemma
-   - reification
-     + reify to PHOAS first, then to flat structure
-   - support for ret
-     + duplicating/deduplicating rets
-   - support for free variables
-     + need to renumber them on both sides of the lemma to match the
-       program
-   - support for unused bindings
-     *)
-
-    Definition update_maps_ind (lem2prog prog2lem : map) (li pi : nat)
-      : map * map + error :=
-      match find li lem2prog with
-      | Some pi' => if pi =? pi'
-                    then ok (lem2prog, prog2lem)
-                    else raise (E_msg "lem2prog mismatch")
-      | None =>
-        let lem2prog := add li pi lem2prog in
-        match find pi prog2lem with
-        | Some li' => if li =? li'
-                      then ok (lem2prog, prog2lem)
-                      else raise (E_msg "prog2lem mismatch")
-        | None =>
-          let prog2lem := add pi li prog2lem in
-          ok (prog2lem, lem2prog)
-        end
-      end.
-
-    Fixpoint update_maps_ref (loff poff : nat) (lem2prog prog2lem : map)
-             (lr pr : ref) {struct lr} :
-      map * map + error :=
-      match lr, pr with
-      | ref_index ln, ref_index pn =>
-        update_maps_ind lem2prog prog2lem (loff + ln) (poff + pn)
-      | ref_pair lr1 lr2, ref_pair pr1 pr2 =>
-        '(lem2prog, prog2lem) <-!
-         update_maps_ref loff poff lem2prog prog2lem lr1 pr1;
-          update_maps_ref loff poff lem2prog prog2lem lr2 pr2
-      | _, _ => raise (E_msg "ref mismatch")
-      end.
-
-    Definition update_maps_op
-               (lop pop : operation)
-               (loff poff : nat) (lem2prog prog2lem : map)
-      : map * map + error :=
-      match lop, pop with
-      | op_unit, op_unit => ok (lem2prog, prog2lem)
-      | op_app lc lr, op_app pc pr =>
-        if const_eqb lc pc
-        then update_maps_ref loff poff lem2prog prog2lem lr pr
-        else raise (E_msg "op const mismatch")
-      | op_retapp lc lr, op_retapp pc pr =>
-        if retconst_eqb lc pc
-        then update_maps_ref loff poff lem2prog prog2lem lr pr
-        else raise (E_msg "op retconst mismatch")
-      | _, _ => raise (E_msg "operation mismatch")
-      end.
-
-    (* iterate over lbinds, using the map found so far to index into
-     * pbinds.  lbinds gets shorter, pbinds stays the same.
-     * The "empty lem2prog entry" error occurs if the lemma has unused
-     * bindings; "bad lem2prog entry" occurs if the program refers to a
-     * free variable but that variable is not free in the lemma. *)
-    Fixpoint find_match'
-             (lbinds pbinds : list operation) (lhead phead : operation)
-             (loff poff : nat) (lem2prog prog2lem : map) {struct lbinds}
-      : map * map + error :=
-      '(lem2prog, prog2lem) <-!
-       update_maps_op lhead phead loff poff lem2prog prog2lem;
-        match lbinds with
-        | nil => ok (lem2prog, prog2lem)
-        | cons lhead lbinds =>
-          match find loff lem2prog with
-          | Some pi =>
-            match List.nth_error pbinds pi with
-            | Some phead => find_match' lbinds pbinds
-                                        lhead phead
-                                        (S loff) (S pi)
-                                        lem2prog prog2lem
-            | None => raise (E_msg "bad lem2prog entry")
-            end
-          | None => raise (E_msg "empty lem2prog entry")
-          end
-        end.
-
-    (* binds and lbinds are in reversed order from their usual order in
-   expr.  returns lemma-to-program and program-to-lemma maps of de
-   Bruijn indices relative to the head
-     *)
-    Definition find_match (lbinds pbinds : list operation)
-               (lhead phead : operation) : map * map + error :=
-      find_match' lbinds pbinds lhead phead 0 0 empty empty.
-  End WithMap.
-End Rewriter.

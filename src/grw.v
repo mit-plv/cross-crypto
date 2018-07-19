@@ -926,11 +926,7 @@ Module Rewriter.
   Inductive error :=
   | E_debug {t : Type} (_ : t)
   | E_todo (_ : string)
-  | E_msg (_ : string)
-  (* returns a list of the offset of each match,
-   * along with the reason it failed *)
-  | E_all_matches_failed (_ : list (nat * error))
-  | E_no_matches.
+  | E_msg (_ : string).
 
   Local Notation ok := inl.
   Local Notation raise := inr.
@@ -941,9 +937,12 @@ Module Rewriter.
     | raise e => raise e
     end.
   Local Notation "x <-! a ; b" := (err_bind a (fun x => b))
-                                    (at level 100).
+                                    (right associativity,
+                                     at level 100).
   Local Notation "' x <-! a ; b" := (err_bind a (fun 'x => b))
-                                      (x strict pattern, at level 100).
+                                      (x strict pattern,
+                                       right associativity,
+                                       at level 100).
 
   Section WithMap.
     Context (map_operations : fmap.operations nat nat).
@@ -951,6 +950,7 @@ Module Rewriter.
     Local Notation empty := (map_operations.(fmap.empty)).
     Local Notation add := (map_operations.(fmap.add)).
     Local Notation find := (map_operations.(fmap.find)).
+    Local Notation fold_ac := (map_operations.(fmap.fold_ac)).
 
     Definition op_matches (o1 o2 : operation) :=
       match o1, o2 with
@@ -966,6 +966,7 @@ Module Rewriter.
      * - matching rewrite
      *   + (normalize lemma by removing any unused bindings)
      *   + find a match (inverse maps which line up program and lemma)
+     *   + check that the match is externally acceptable
      *   + generate a sequence of swaps
      *   + either:
      *     * check the legality of the swaps relative to the initial
@@ -1071,28 +1072,55 @@ Module Rewriter.
                (lhead phead : operation) : map * map + error :=
       map_match' lbinds pbinds lhead phead 0 0 empty empty.
 
-    Definition find_match (lbinds prog : list operation)
-             (lhead : operation) :
-      ((list operation * operation * list operation) *
-       (map * map)) + error :=
+    Fixpoint refsb (r : ref) (n : nat) :=
+      match r with
+      | ref_index k => n =? k
+      | ref_pair r1 r2 => refsb r1 n || refsb r2 n
+      end.
+
+    Definition op_refsb (o : operation) (n : nat) :=
+      match o with
+      | op_unit => false
+      | op_app _ r | op_retapp _ r => refsb r n
+      end.
+
+    Fixpoint bindings_refb (p : list operation) (n : nat) :=
+      match p with
+      | nil => false
+      | o :: p => op_refsb o n || bindings_refb p (S n)
+      end.
+
+    Definition check_no_capturing (ptail : list operation)
+               (prog_end : operation)
+               (prog2lem : map) : unit + error :=
+      fold_ac _ (fun n _ acc =>
+                   _ <-! acc;
+                     if bindings_refb ptail (S n)
+                        || op_refsb prog_end (S (length ptail) + n)
+                     then raise (E_msg "tail captures binding")
+                     else ok tt)
+              (ok tt) prog2lem.
+
+    Definition find_matches (lbinds prog : list operation)
+             (lhead prog_end : operation) :
+      list ((list operation * operation * list operation) *
+            ((map * map) + error)) :=
+      (* match base has the form:
+       * (tail (normal order), head, binds (reversed order)) *)
       let match_bases :=
           Decompose.find_all (fun _ => op_matches lhead) prog in
-      _ <-! match match_bases return unit + error with
-            | nil => raise E_no_matches
-            | _ => ok tt
-            end;
       (fix check_matches
-           (errs : list (nat * error))
            (l : list (list operation * operation * list operation)) :=
          match l with
-         | nil => raise (E_all_matches_failed errs)
+         | nil => nil
          | cons ((ptail, phead, pbinds) as loc) l =>
-           match map_match lbinds pbinds lhead phead with
-           | ok maps => ok (loc, maps)
-           | raise e =>
-             check_matches ((length pbinds, e) :: errs) l
-           end
-         end) nil match_bases.
+           (loc,
+            maps <-! map_match lbinds pbinds lhead phead;
+              _ <-! (let '(_, prog2lem) := maps in
+                     check_no_capturing ptail prog_end prog2lem);
+              ok maps)
+             :: check_matches l
+         end) match_bases.
   End WithMap.
 End Rewriter.
 
@@ -1154,6 +1182,7 @@ Section ExampleCoins.
 
   Goal False.
     pose (rev (fst coins_example)) as prog; cbv in prog.
+    pose (snd coins_example) as prog_end; cbv in prog_end.
 
     pose (hd op_unit (rev (fst coins_example))) as phead; cbv in phead.
     pose (tl (rev (fst coins_example))) as pbinds; cbv in pbinds.
@@ -1162,6 +1191,7 @@ Section ExampleCoins.
 
     pose (Rewriter.map_match map lbinds pbinds lhead phead) as M; cbv in M.
 
-    pose (Rewriter.find_match map lbinds prog lhead) as F; cbv in F.
+    pose (Rewriter.find_matches map lbinds prog lhead prog_end) as F;
+      cbv in F.
   Abort.
 End ExampleCoins.

@@ -925,6 +925,7 @@ Qed.
 Module Rewriter.
   Inductive error :=
   | E_debug {t : Type} (_ : t)
+  | E_trace {t u : Type} (_ : t) (_ : u + error)
   | E_todo (_ : string)
   | E_msg (_ : string).
 
@@ -965,9 +966,10 @@ Module Rewriter.
     (* TODO
      * - matching rewrite
      *   + (normalize lemma by removing any unused bindings)
-     *   + find a match (inverse maps which line up program and lemma)
-     *   + check that the match is externally acceptable
-     *   + generate a sequence of swaps
+     *   X find a match (inverse maps which line up program and lemma)
+     *   + (renumber the lemma's free variables)
+     *   X check that the match isn't captured by the program's tail
+     *   X generate a sequence of swaps
      *   + either:
      *     * check the legality of the swaps relative to the initial
      *       (or maybe final) version somehow
@@ -994,13 +996,13 @@ Module Rewriter.
       match find li lem2prog with
       | Some pi' => if pi =? pi'
                     then ok (lem2prog, prog2lem)
-                    else raise (E_msg "lem2prog mismatch")
+                    else raise (E_msg "map_match: lem2prog mismatch")
       | None =>
         let lem2prog := add li pi lem2prog in
         match find pi prog2lem with
         | Some li' => if li =? li'
                       then ok (lem2prog, prog2lem)
-                      else raise (E_msg "prog2lem mismatch")
+                      else raise (E_msg "map_match: prog2lem mismatch")
         | None =>
           let prog2lem := add pi li prog2lem in
           ok (lem2prog, prog2lem)
@@ -1017,7 +1019,7 @@ Module Rewriter.
         '(lem2prog, prog2lem) <-!
          update_maps_ref loff poff lem2prog prog2lem lr1 pr1;
           update_maps_ref loff poff lem2prog prog2lem lr2 pr2
-      | _, _ => raise (E_msg "ref mismatch")
+      | _, _ => raise (E_msg "map_match: ref mismatch")
       end.
 
     Definition update_maps_op
@@ -1029,12 +1031,12 @@ Module Rewriter.
       | op_app lc lr, op_app pc pr =>
         if const_eqb lc pc
         then update_maps_ref loff poff lem2prog prog2lem lr pr
-        else raise (E_msg "op const mismatch")
+        else raise (E_msg "map_match: op const mismatch")
       | op_retapp lc lr, op_retapp pc pr =>
         if retconst_eqb lc pc
         then update_maps_ref loff poff lem2prog prog2lem lr pr
-        else raise (E_msg "op retconst mismatch")
-      | _, _ => raise (E_msg "operation mismatch")
+        else raise (E_msg "map_match: op retconst mismatch")
+      | _, _ => raise (E_msg "map_match: operation mismatch")
       end.
 
     (* iterate over lbinds, using the map found so far to index into
@@ -1058,9 +1060,9 @@ Module Rewriter.
                                         lhead phead
                                         (S loff) (S pi)
                                         lem2prog prog2lem
-            | None => raise (E_msg "bad lem2prog entry")
+            | None => raise (E_msg "map_match: bad lem2prog entry")
             end
-          | None => raise (E_msg "empty lem2prog entry")
+          | None => raise (E_msg "map_match: empty lem2prog entry")
           end
         end.
 
@@ -1090,14 +1092,14 @@ Module Rewriter.
       | o :: p => op_refsb o n || bindings_refb p (S n)
       end.
 
-    Definition check_no_capturing (ptail : list operation)
+    Definition check_no_capturing_tail (ptail : list operation)
                (prog_end : operation)
                (prog2lem : map) : unit + error :=
       fold_ac _ (fun n _ acc =>
                    _ <-! acc;
                      if bindings_refb ptail (S n)
                         || op_refsb prog_end (S (length ptail) + n)
-                     then raise (E_msg "tail captures binding")
+                     then raise (E_msg "check_no_capturing_tail: capture")
                      else ok tt)
               (ok tt) prog2lem.
 
@@ -1117,10 +1119,40 @@ Module Rewriter.
            (loc,
             maps <-! map_match lbinds pbinds lhead phead;
               _ <-! (let '(_, prog2lem) := maps in
-                     check_no_capturing ptail prog_end prog2lem);
+                     check_no_capturing_tail ptail prog_end prog2lem);
               ok maps)
              :: check_matches l
          end) match_bases.
+
+    Definition renumber_swap (from to j : nat) : nat :=
+      if j =? from
+      then to
+      else if (to <=? j) && (j <? from)
+           then S j
+           else j.
+
+    Definition renumber_lem2prog (lem2prog : map) (pi li : nat) :=
+      fold_ac _ (fun lj pj lem2prog =>
+                   if pj =? pi
+                   then lem2prog
+                   else add lj (renumber_swap pi li pj) lem2prog)
+              empty lem2prog.
+
+    Fixpoint generate_swaps' lem2prog (swaps : list (nat * nat)) (li : nat) (n : nat) :=
+      match n with
+      | 0 => ok swaps
+      | S n =>
+        match find li lem2prog with
+        | Some pi => generate_swaps' (renumber_lem2prog lem2prog pi li)
+                                     ((pi, li) :: swaps)
+                                     (S li) n
+        | None => raise (E_msg "generate_swaps: bad li")
+        end
+      end.
+
+    Definition generate_swaps lem2prog (len_lbinds : nat) :=
+      swaps <-! generate_swaps' lem2prog nil 0 len_lbinds;
+        ok (rev swaps).
   End WithMap.
 End Rewriter.
 
@@ -1193,5 +1225,11 @@ Section ExampleCoins.
 
     pose (Rewriter.find_matches map lbinds prog lhead prog_end) as F;
       cbv in F.
+
+    pose ((3, 1) :: (2, 5) :: (1, 0) :: (0, 4) :: nil) as lem2prog.
+    pose ((1, 3) :: (5, 2) :: (0, 1) :: (4, 0) :: nil) as prog2lem.
+    pose (Rewriter.generate_swaps map lem2prog (length lbinds)) as GS;
+      cbv in GS.
+
   Abort.
 End ExampleCoins.

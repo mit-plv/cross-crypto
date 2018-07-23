@@ -176,22 +176,32 @@ Module Decompose.
       cbv [found]; eauto.
     Qed.
 
-    Definition index l n : option (list A * list A) :=
-      match find (fun i _ => Nat.eqb i n) l with
-      | Some (a, x, b) => Some (a, x :: b)
-      | None => None
+    Fixpoint index' acc l n {struct n} : option (list A * A * list A) :=
+      match l with
+      | nil => None
+      | x :: l =>
+        match n with
+        | 0 => Some (acc, x, l)
+        | S n => index' (x :: acc) l n
+        end
       end.
 
-    Lemma index_correct l n : match index l n with
-                                     | Some (a, b) => l = rev_append a b
-                                     | None => True
-                                     end.
+    Definition index l n : option (list A * A * list A) :=
+      index' nil l n.
+
+    Lemma index_correct l n :
+      match index l n with
+      | Some (a, x, b) => l = rev_append a (x :: b)
+      | None => True
+      end.
     Proof.
-      cbv [index].
-      pose proof (find_spec (fun i _ => Nat.eqb i n) l) as H.
-      destruct (find _ _) as [[[??]?]|];
-        cbv [found] in H;
-        intuition idtac.
+      enough (forall acc,
+                 match index' acc l n with
+                 | Some (a, x, b) => rev_append acc l = rev_append a (x :: b)
+                 | None => True
+                 end) as H by eapply H.
+      revert l; induction n; intros [|y l] acc; cbn [index']; eauto.
+      eapply (IHn l (y :: acc)).
     Qed.
   End WithElementType.
 End Decompose.

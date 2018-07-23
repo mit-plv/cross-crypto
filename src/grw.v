@@ -970,14 +970,9 @@ Module Rewriter.
      *   + (renumber the lemma's free variables)
      *   X check that the match isn't captured by the program's tail
      *   X generate a sequence of swaps
-     *   + either:
-     *     * check the legality of the swaps relative to the initial
-     *       (or maybe final) version somehow
-     *     * compose the swaps into a permutation
-     *     * rewrite with the permutation
-     *     * prove that you get the same answer as a sequence of swaps
-     *   + or:
-     *     * just check and run the swaps individually
+     *   X check the legality of the swaps
+     *   * prove the swap-checker correct
+     *   X run the swaps individually
      *   + run the strict matcher
      *     (could prove that it always succeeds but that would be hard)
      *   + rewrite the lemma
@@ -1103,26 +1098,12 @@ Module Rewriter.
                      else ok tt)
               (ok tt) prog2lem.
 
-    Definition find_matches (lbinds prog : list operation)
-             (lhead prog_end : operation) :
-      list ((list operation * operation * list operation) *
-            ((map * map) + error)) :=
-      (* match base has the form:
-       * (tail (normal order), head, binds (reversed order)) *)
-      let match_bases :=
-          Decompose.find_all (fun _ => op_matches lhead) prog in
-      (fix check_matches
-           (l : list (list operation * operation * list operation)) :=
-         match l with
-         | nil => nil
-         | cons ((ptail, phead, pbinds) as loc) l =>
-           (loc,
-            maps <-! map_match lbinds pbinds lhead phead;
-              _ <-! (let '(_, prog2lem) := maps in
-                     check_no_capturing_tail ptail prog_end prog2lem);
-              ok maps)
-             :: check_matches l
-         end) match_bases.
+    Definition renumber_swap_to_here (from j : nat) : nat :=
+      if j =? from
+      then 0
+      else if j <? from
+           then S j
+           else j.
 
     Definition renumber_swap (from to j : nat) : nat :=
       if j =? from
@@ -1138,7 +1119,8 @@ Module Rewriter.
                    else add lj (renumber_swap pi li pj) lem2prog)
               empty lem2prog.
 
-    Fixpoint generate_swaps' lem2prog (swaps : list (nat * nat)) (li : nat) (n : nat) :=
+    Fixpoint generate_swaps' lem2prog (swaps : list (nat * nat))
+             (li : nat) (n : nat) :=
       match n with
       | 0 => ok swaps
       | S n =>
@@ -1150,9 +1132,82 @@ Module Rewriter.
         end
       end.
 
-    Definition generate_swaps lem2prog (len_lbinds : nat) :=
+    Definition generate_swaps lem2prog (len_lbinds : nat)
+      : list (nat * nat) + error :=
       swaps <-! generate_swaps' lem2prog nil 0 len_lbinds;
         ok (rev swaps).
+
+    Definition swap_pbinds (from to : nat) (pbinds : list operation)
+      : list operation + error :=
+      match Decompose.index pbinds to with
+      | Some (swap_coda, to_op, tmp) =>
+        let distance := from - to in
+        match Decompose.index (to_op :: tmp) distance with
+        | Some (swap_middle, from_op, swap_prelude) =>
+          if bindings_refb swap_middle 0
+          then raise (E_msg "swap_middle references from")
+          else
+            ok (rev_append
+                  (renumber_bindings (renumber_swap_to_here distance)
+                                     swap_coda)
+                  ((renumber_op (plus distance) from_op)
+                     :: (rev_append (renumber_bindings pred swap_middle)
+                                    swap_prelude)))
+        | None => raise (E_msg "to out of range")
+        end
+      | None => raise (E_msg "from out of range")
+      end.
+
+    Fixpoint swaps_pbinds (swaps : list (nat * nat))
+             (pbinds : list operation) : list operation + error :=
+      match swaps with
+      | nil => ok pbinds
+      | (from, to) :: swaps => pbinds <-! swap_pbinds from to pbinds;
+                                 swaps_pbinds swaps pbinds
+      end.
+
+
+    Fixpoint swaps_phead_ptail (swaps : list (nat * nat))
+             (phead_ptail : list operation) : list operation :=
+      match swaps with
+      | nil => phead_ptail
+      | (from, to) :: swaps =>
+        swaps_phead_ptail swaps
+                          (renumber_bindings (renumber_swap from to)
+                                             phead_ptail)
+      end.
+
+    Fixpoint swaps_prog_end (len_ptail : nat) (swaps : list (nat * nat))
+             (prog_end : operation) : operation :=
+      match swaps with
+      | nil => prog_end
+      | (from, to) :: swaps =>
+        swaps_prog_end len_ptail
+          swaps (renumber_op (offset_renumbering (S len_ptail)
+                                                 (renumber_swap from to))
+                             prog_end)
+      end.
+
+    Definition commute_matches (lbinds prog : list operation)
+               (lhead prog_end : operation) :
+      list (nat * ((list operation * operation) + error)) :=
+      (* match base has the form:
+       * (tail (normal order), head, binds (reversed order)) *)
+      let match_bases :=
+          Decompose.find_all (fun _ => op_matches lhead) (rev prog) in
+      let len_lbinds := length lbinds in
+      List.map
+        (fun '(ptail, phead, pbinds) =>
+           let len_ptail := length ptail in
+           (len_ptail,
+            '(lem2prog, prog2lem) <-! map_match lbinds pbinds lhead phead;
+              _ <-! check_no_capturing_tail ptail prog_end prog2lem;
+              swaps <-! generate_swaps lem2prog len_lbinds;
+              new_pbinds <-! swaps_pbinds swaps pbinds;
+              ok (rev_append new_pbinds
+                             (swaps_phead_ptail swaps (phead :: ptail)),
+                  swaps_prog_end len_ptail swaps prog_end)))
+        match_bases.
   End WithMap.
 End Rewriter.
 
@@ -1213,23 +1268,13 @@ Section ExampleCoins.
   Abort.
 
   Goal False.
-    pose (rev (fst coins_example)) as prog; cbv in prog.
+    pose (fst coins_example) as prog; cbv in prog.
     pose (snd coins_example) as prog_end; cbv in prog_end.
 
-    pose (hd op_unit (rev (fst coins_example))) as phead; cbv in phead.
-    pose (tl (rev (fst coins_example))) as pbinds; cbv in pbinds.
     pose (rev (fst example_coin_lemma_lhs)) as lbinds; cbv in lbinds.
     pose (snd example_coin_lemma_lhs) as lhead; cbv in lhead.
 
-    pose (Rewriter.map_match map lbinds pbinds lhead phead) as M; cbv in M.
-
-    pose (Rewriter.find_matches map lbinds prog lhead prog_end) as F;
-      cbv in F.
-
-    pose ((3, 1) :: (2, 5) :: (1, 0) :: (0, 4) :: nil) as lem2prog.
-    pose ((1, 3) :: (5, 2) :: (0, 1) :: (4, 0) :: nil) as prog2lem.
-    pose (Rewriter.generate_swaps map lem2prog (length lbinds)) as GS;
-      cbv in GS.
-
+    pose (Rewriter.commute_matches map lbinds prog lhead prog_end) as C;
+      cbv in C.
   Abort.
 End ExampleCoins.

@@ -1,5 +1,23 @@
 Require Import Coq.Lists.List.
 
+Create HintDb listrew discriminated.
+Hint Rewrite
+     PeanoNat.Nat.add_succ_r
+     PeanoNat.Nat.add_0_r
+     app_length
+     app_nil_r
+     rev_app_distr
+     rev_append_rev
+     rev_involutive
+  : listrew.
+Hint Rewrite <-
+     app_assoc
+     app_comm_cons
+  : listrew.
+Ltac listrew :=
+  repeat ((progress autorewrite with listrew in * ) ||
+          (progress (cbn [rev app length] in * ))).
+
 Module FromNil.
   Section WithElementType.
     Context {A : Type}.
@@ -46,13 +64,6 @@ Module Decompose.
     Definition found f l a (x : A) b :=
       l = rev_append a (x :: b) /\ f (length a) x = true.
 
-    Local Create HintDb listutil discriminated.
-    Local Hint Rewrite rev_append_rev
-          app_length
-          PeanoNat.Nat.add_1_r
-          rev_app_distr
-          rev_involutive : listutil.
-    Local Hint Rewrite <- app_assoc : listutil.
     Local Ltac crush :=
       repeat match goal with
              | H : (_ :: _) = (_ :: _) |- _ => inversion H; clear H
@@ -63,8 +74,10 @@ Module Decompose.
              | H : (rev _) = (rev _) |- _ =>
                eapply (f_equal (@rev _)) in H;
                repeat rewrite rev_involutive in H
-             | _ => autorewrite with listutil in *;
-                    cbn [rev_append rev length app] in *;
+             | H : _ /\ _ |- _ => destruct H
+             | H : exists _, _ |- _ => destruct H
+             | _ => cbv [found] in *;
+                    listrew;
                     subst;
                     intuition idtac
              end.
@@ -75,7 +88,6 @@ Module Decompose.
       (exists a', a = (a' ++ y :: nil) /\
                   found (fun i => f (S i)) l a' x b).
     Proof.
-      cbv [found].
       pattern a; eapply rev_ind.
       - crush.
       - right; eexists; crush.
@@ -87,12 +99,11 @@ Module Decompose.
       (exists b', b = (b' ++ y :: nil) /\
                   found f (rev l) a x b').
     Proof.
-      cbv [found].
       pattern b; eapply rev_ind.
       - crush.
-      - intros z b' _ [H H'].
+      - intros z b' _ [??].
         replace (rev_append a (x :: b' ++ z :: nil)) with
-            (rev (z :: rev b' ++ x :: a)) in H by crush.
+            (rev (z :: rev b' ++ x :: a)) in * by crush.
         right; eexists; crush.
     Qed.
 
@@ -115,16 +126,14 @@ Module Decompose.
         cbv [find].
         specialize (H nil); cbn [rev length] in H.
         refine ((fun H' => ltac:(clear H)) (H _)).
-        - destruct (find' f 0 nil l) as [[[??]?]|];
-            rewrite ?app_nil_r in H'; cbn [rev_append] in H'; intuition.
-        - intros (?&?&?&Hnil).
-          cbv [found rev] in Hnil.
-          rewrite rev_append_rev in Hnil.
+        - destruct (find' f 0 nil l) as [[[??]?]|]; crush.
+        - intros (?&?&?&?).
+          crush.
           eapply app_cons_not_nil; intuition eauto.
       }
       induction l as [|y l];
         intros acc Hacc; cbn [find' rev_append app].
-      - rewrite rev_append_rev, app_nil_r; eauto.
+      - crush.
       - cbv [found].
         remember (f (length acc) y) as b; destruct b;
           try solve [intuition eauto].
@@ -191,17 +200,20 @@ Module Decompose.
 
     Lemma index_correct l n :
       match index l n with
-      | Some (a, x, b) => l = rev_append a (x :: b)
+      | Some (a, x, b) => l = rev_append a (x :: b) /\ length a = n
       | None => True
       end.
     Proof.
       enough (forall acc,
                  match index' acc l n with
-                 | Some (a, x, b) => rev_append acc l = rev_append a (x :: b)
+                 | Some (a, x, b) =>
+                   rev_append acc l = rev_append a (x :: b) /\
+                   length a = length acc + n
                  | None => True
                  end) as H by eapply H.
       revert l; induction n; intros [|y l] acc; cbn [index']; eauto.
-      eapply (IHn l (y :: acc)).
+      specialize (IHn l (y :: acc)).
+      destruct (index' _ _ _) as [[[??]?]|]; intuition crush.
     Qed.
   End WithElementType.
 End Decompose.

@@ -15,8 +15,8 @@ Hint Rewrite <-
      app_comm_cons
   : listrew.
 Ltac listrew :=
-  repeat ((progress autorewrite with listrew in * ) ||
-          (progress (cbn [rev app length] in * ))).
+  repeat (autorewrite with listrew in *;
+          cbn [rev app length] in *).
 
 Module FromNil.
   Section WithElementType.

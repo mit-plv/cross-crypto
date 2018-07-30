@@ -1766,6 +1766,78 @@ Module Rewriter.
   End WithMap.
 End Rewriter.
 
+(** Reification *)
+Ltac reify_type t :=
+  lazymatch t with
+  | prod ?ta ?tb =>
+    let ta := reify_type ta in
+    let tb := reify_type tb in
+    uconstr:(tprod ta tb)
+  | bool => tbool
+  | unit => tunit
+  | interp_type ?t => t
+  | _ => fail "UNKNOWN TYPE" t
+  end.
+
+Ltac pindexof x ctx :=
+  lazymatch ctx with
+  | (x, _) => uconstr:(O)
+  | (_, ?ctx) =>
+    let i := pindexof x ctx in
+    uconstr:(S i)
+  | _ => fail "NOT FOUND" x
+  end.
+
+Ltac reify_ref ctx r :=
+  lazymatch r with
+  | pair ?a ?b =>
+    let a := reify_ref ctx a in
+    let b := reify_ref ctx b in
+    uconstr:(ref_pair a b)
+  | ?x =>
+    let r := pindexof r ctx in
+    uconstr:(ref_index r)
+  end.
+
+Ltac reify_op ctx o :=
+  lazymatch o with
+  | ret tt => uconstr:(op_unit)
+  | interp_const coin ?a =>
+    let a := pindexof a ctx in
+    uconstr:(op_app coin (ref_index a))
+  | ret xorb ?a ?b =>
+    let a := pindexof a ctx in
+    let b := pindexof b ctx in
+    uconstr:(op_retapp xor' (ref_pair (ref_index a) (ref_index b)))
+  | ret ?x =>
+    let t := lazymatch type of x with ?T => reify_type T end in
+    let x := reify_ref ctx x in
+    uconstr:(op_retapp (id t) x)
+  | ?O => fail "UNKNOWN OP" O
+  end.
+
+Ltac reify_to_list ctx e :=
+  lazymatch e with
+  | (x <-$ ?o; ?f) =>
+    let T := lazymatch type of o with Comp ?T => T | M ?T => constr:(interp_type T) | ?X => fail "XX" X end in
+    let o := reify_op ctx o in
+    let _y := fresh in let y := fresh in (* andres thinks this might work around a coq bug but does not remember which one :( *)
+    lazymatch constr:(fun (y:T) => ltac:(
+        let r := reify_to_list
+          constr:(pair y ctx)
+          constr:(match y return _ with x => f end) in
+        exact r
+     )) with fun _ => ?r => uconstr:(@cons operation o r) | _ => fail "FUNDEP" end
+  | ?o =>
+    let o := reify_op ctx o in
+    uconstr:(@cons operation o (@nil operation))
+  | ?O => fail "UNKNOWN EXPR" O
+  end.
+Ltac reify e :=
+  let e := reify_to_list tt e in
+  let e := eval cbv in (List.removelast e, List.last e op_unit) in
+  constr:(e).
+
 Section ExampleCoins.
   Import CrossCrypto.fmap.list_of_pairs.
   Local Notation map := (list_of_pairs Nat.eqb).
@@ -1803,11 +1875,10 @@ Section ExampleCoins.
   Qed.
 
   Definition coins_example :=
-    (op_unit
-       :: op_app coin (ref_index 0)
-       :: op_unit :: op_app coin (ref_index 0)
-       :: op_unit :: op_app coin (ref_index 0)
-       :: op_retapp xor' (ref_pair (ref_index 4) (ref_index 0))
+    (op_unit :: op_app coin (ref_index 0)
+  :: op_unit :: op_app coin (ref_index 0)
+  :: op_unit :: op_app coin (ref_index 0)
+  :: op_retapp xor' (ref_pair (ref_index 4) (ref_index 0))
        :: nil,
      op_retapp
        (id ((tbool * tbool) * tbool))
@@ -1827,4 +1898,35 @@ Section ExampleCoins.
     eapply Forall_inv in H.
     etransitivity; [eapply H|].
   Abort.
+
+
+  (*
+  Eval cbv [M interp_expr coins_example interp_bindings Mbind Mret interp_op_silent interp_op lookup_ref lookup transport type_dec type_rec type_rect op_type cdom eq_rect_r eq_rect eq_sym rcdom ccod rccod interp_retconst] in
+      interp_expr tunit tt coins_example.
+   *)
+  
+  Definition coins_example' :=
+    x <-$ ret tt;
+    x0 <-$ interp_const coin x;
+    x1 <-$ ret tt;
+    x2 <-$ interp_const coin x1;
+    x3 <-$ ret tt;
+    x4 <-$ interp_const coin x3;
+    x5 <-$ ret xorb x0 x4;
+    ret (x5, x2, x2).
+  Derive reified_coins_example
+  SuchThat (reified_coins_example = coins_example')
+  As reified_coins_example'_correct.
+  Proof.
+    cbv [coins_example'].
+
+    let x := reified_coins_example in
+    let x := eval unfold x in x in
+    let e := match goal with |- ?LHS = ?RHS => RHS end in
+    let e := reify e in
+    unify x (interp_expr tunit tt e).
+
+    reflexivity.
+  Qed.
+  Print reified_coins_example.
 End ExampleCoins.

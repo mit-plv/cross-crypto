@@ -9,6 +9,7 @@ Hint Rewrite
      rev_app_distr
      rev_append_rev
      rev_involutive
+     rev_length
   : listrew.
 Hint Rewrite <-
      app_assoc
@@ -215,5 +216,69 @@ Module Decompose.
       specialize (IHn l (y :: acc)).
       destruct (index' _ _ _) as [[[??]?]|]; intuition crush.
     Qed.
+
+    Section Prefix.
+      Context (A_eqb : A -> A -> bool)
+              (A_eqb_eq : forall a a' : A, A_eqb a a' = true <-> a = a').
+
+      Fixpoint prefix pre l : option (list A) :=
+        match pre with
+        | nil => Some l
+        | x :: pre =>
+          match l with
+          | nil => None
+          | a :: l => if A_eqb x a
+                      then prefix pre l
+                      else None
+          end
+        end.
+
+      Lemma prefix_correct pre l : match prefix pre l with
+                                   | Some rest => l = pre ++ rest
+                                   | None => True
+                                   end.
+      Proof.
+        revert l; induction pre as [|x pre];
+          intros l; cbn [prefix app]; eauto.
+        destruct l as [|a l]; eauto.
+        pose proof (A_eqb_eq x a); specialize (IHpre l).
+        destruct (A_eqb x a), (prefix pre l); intuition congruence.
+      Qed.
+    End Prefix.
   End WithElementType.
 End Decompose.
+
+Module ListDec.
+  Section WithElementType.
+    Context {A : Type}.
+
+    Section EqDec.
+      Context (A_eq_dec : forall a a' : A, {a = a'} + {a <> a'}).
+
+      Definition list_eq_dec (l l' : list A) : {l = l'} + {l <> l'}.
+        let t := (try solve [subst; eauto | right; intro; congruence]) in
+        revert l'; induction l as [|a l]; destruct l' as [|a' l']; t;
+        destruct (A_eq_dec a a'), (IHl l'); t.
+      Defined.
+    End EqDec.
+
+    Section Eqb.
+      Context (A_eqb : A -> A -> bool)
+              (A_eqb_eq : forall a a' : A, A_eqb a a' = true <-> a = a').
+
+      Fixpoint list_eqb (l l' : list A) : bool :=
+        match l, l' with
+        | nil, nil => true
+        | a :: l, a' :: l' => A_eqb a a' && list_eqb l l'
+        | _, _ => false
+        end.
+
+      Lemma list_eqb_eq (l l' : list A) : list_eqb l l' = true <-> l = l'.
+      Proof.
+        revert l'; induction l; destruct l'; cbn [list_eqb];
+          rewrite ?Bool.andb_true_iff, ?A_eqb_eq, ?IHl in *;
+          intuition congruence.
+      Qed.
+    End Eqb.
+  End WithElementType.
+End ListDec.

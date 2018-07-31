@@ -11,6 +11,8 @@ Require Import CrossCrypto.RewriteUtil.
 Require Import CrossCrypto.ListUtil.
 Require CrossCrypto.fmap.list_of_pairs.
 
+Local Existing Instance eq_subrelation | 5.
+
 Fixpoint optsub (n m : nat) {struct m} : option nat :=
   match m with
   | 0 => Some n
@@ -60,8 +62,10 @@ Local Ltac crush_deciders t :=
                              congruence);
             clear H
           | _ => intuition idtac
+          | _ => congruence
           | _ => omega
-          end; t).
+          | _ => t
+          end).
 
 Inductive type : Set :=
 | tunit : type
@@ -211,6 +215,20 @@ Inductive ref : Type :=
 | ref_index : nat -> ref
 | ref_pair : ref -> ref -> ref.
 
+Fixpoint ref_eqb (r r' : ref) : bool :=
+  match r, r' with
+  | ref_index i, ref_index i' => i =? i'
+  | ref_pair r1 r2, ref_pair r1' r2' => ref_eqb r1 r1' && ref_eqb r2 r2'
+  | _, _ => false
+  end.
+
+Lemma ref_eqb_eq r r' : ref_eqb r r' = true <-> r = r'.
+Proof.
+  revert r'; induction r; destruct r'; cbn [ref_eqb];
+    let t := (rewrite ?IHr1, ?IHr2, ?andb_true_iff, ?Nat.eqb_eq in * ) in
+    repeat (intuition idtac; t); congruence.
+Qed.
+
 Inductive operation : Type :=
 | op_unit : operation
 | op_app (c : const) : ref -> operation
@@ -218,6 +236,21 @@ Inductive operation : Type :=
 
 Lemma op_dec (o1 o2 : operation) : {o1 = o2} + {o1 <> o2}.
 Proof. repeat decide equality; congruence. Defined.
+
+Definition op_eqb (o o' : operation) : bool :=
+  match o, o' with
+  | op_unit, op_unit => true
+  | op_app c r, op_app c' r' => const_eqb c c' && ref_eqb r r'
+  | op_retapp c r, op_retapp c' r' => retconst_eqb c c' && ref_eqb r r'
+  | _, _ => false
+  end.
+
+Lemma op_eqb_eq o o' : op_eqb o o' = true <-> o = o'.
+Proof.
+  destruct o, o'; cbn [op_eqb];
+    rewrite ?andb_true_iff, ?const_eqb_eq, ?retconst_eqb_eq,
+    ?ref_eqb_eq in *; intuition congruence.
+Qed.
 
 Definition op_type o : type :=
   match o with
@@ -275,6 +308,24 @@ Definition cast {a : type} (b : type) (x : interp_type a) : interp_type b :=
   | Some x => x
   | None => type_inhabited
   end.
+
+Lemma transport_same {P t} (x : P t) : transport t x = Some x.
+Proof.
+  cbv [transport eq_rect_r]; destruct (type_dec t t); try congruence.
+  cbv [eq_rect_r]. rewrite <-eq_rect_eq_dec; eauto using type_dec.
+Qed.
+
+Lemma cast_same {t} (x : interp_type t) : cast t x = x.
+Proof. cbv [cast]; rewrite transport_same; eauto. Qed.
+
+Lemma transport_different {P t u} (x : P t) : u <> t -> transport u x = None.
+Proof.
+  intros; cbv [transport eq_rect_r]; destruct (type_dec t u); congruence.
+Qed.
+
+Lemma cast_different {t u} (x : interp_type t) :
+  u <> t -> cast u x = type_inhabited.
+Proof. intros; cbv [cast]; rewrite transport_different; eauto. Qed.
 
 Definition interp_op_silent ctxt ctx o : M (op_type o) :=
   match interp_op ctxt ctx o with
@@ -340,16 +391,27 @@ Proof. eapply Bind_Ret_l. Qed.
 Lemma Mbind_Mret_r {t} (x : M t) : Mequiv (Mbind x Mret) x.
 Proof. eapply Bind_Ret_r. Qed.
 
-Lemma Mbind_unused {t1 t2} (a : M t1) (b : M t2) :
-  Mequiv (Mbind a (fun _ => b)) b.
-Proof. eapply Bind_unused. Qed.
+Lemma Mequiv_Mbind_cast {t1 t1' t2} (c1 : M t1) (c1' : M t1')
+      (c2 c2' : forall t, interp_type t -> M t2) :
+  t1 = t1' ->
+  (forall t, Mequiv (Mbind c1 (fun x => Mret (cast t x)))
+                    (Mbind c1' (fun x => Mret (cast t x)))) ->
+  (forall t (x : interp_type t), Mequiv (c2 _ x) (c2' _ x)) ->
+  Mequiv (Mbind c1 (c2 _)) (Mbind c1' (c2' _)).
+Proof.
+  intros ? Hc1 Hc2; subst t1'.
+  eapply Mequiv_Mbind; eauto.
+  specialize (Hc1 t1).
+  setoid_rewrite cast_same in Hc1.
+  setoid_rewrite Mbind_Mret_r in Hc1.
+  eauto.
+Qed.
 
 Local Create HintDb mbind discriminated.
 Hint Rewrite
      @Mbind_assoc
      @Mbind_Mret_l
      @Mbind_Mret_r
-     @Mbind_unused
   : mbind.
 
 Ltac step_Mequiv :=
@@ -359,15 +421,6 @@ Ltac step_Mequiv :=
          | |- Mequiv ?x ?y => change x with y; reflexivity
          | |- _ => autorewrite with mbind
          end.
-
-Lemma transport_same {P t} (x : P t) : transport t x = Some x.
-Proof.
-  cbv [transport eq_rect_r]; destruct (type_dec t t); try congruence.
-  cbv [eq_rect_r]. rewrite <-eq_rect_eq_dec; eauto using type_dec.
-Qed.
-
-Lemma cast_same {t} (x : interp_type t) : cast t x = x.
-Proof. cbv [cast]; rewrite transport_same; eauto. Qed.
 
 Lemma interp_expr_cast_expr_type ctxt ctx e :
   Mequiv (interp_expr_cast ctxt ctx e (expr_type e))
@@ -379,61 +432,11 @@ Proof.
   rewrite cast_same; reflexivity.
 Qed.
 
-Lemma transport_different {P t u} (x : P t) : u <> t -> transport u x = None.
-Proof.
-  intros; cbv [transport eq_rect_r]; destruct (type_dec t u); congruence.
-Qed.
-
-Lemma cast_different {t u} (x : interp_type t) :
-  u <> t -> cast u x = type_inhabited.
-Proof. intros; cbv [cast]; rewrite transport_different; eauto. Qed.
-
-Lemma interp_expr_cast_different ctxt ctx e t :
-  t <> expr_type e ->
-  Mequiv (interp_expr_cast ctxt ctx e t)
-         (Mret type_inhabited).
-Proof.
-  intros; cbv [interp_expr_cast].
-  setoid_rewrite <-(Mbind_unused (interp_expr ctxt ctx e)
-                                 (Mret type_inhabited)).
-  eapply Mequiv_Mbind; [reflexivity|intros].
-  rewrite cast_different by eauto; reflexivity.
-Qed.
-
 Definition equiv_under ctxt ctx e1 e2 :=
   forall t, Mequiv (interp_expr_cast ctxt ctx e1 t)
                    (interp_expr_cast ctxt ctx e2 t).
 
 Definition equiv e1 e2 := forall ctxt ctx, equiv_under ctxt ctx e1 e2.
-Lemma equiv_relevant_types ctxt ctx (e1 e2 : expr) :
-  equiv_under ctxt ctx e1 e2 <->
-  (Mequiv (interp_expr ctxt ctx e1)
-          (interp_expr_cast ctxt ctx e2 _) /\
-   Mequiv (interp_expr_cast ctxt ctx e1 _)
-          (interp_expr ctxt ctx e2)).
-Proof.
-  setoid_rewrite <-interp_expr_cast_expr_type.
-  split; [solve [eauto]|].
-  intros H t.
-  destruct (type_dec t (expr_type e1)); [solve [subst; intuition idtac]|].
-  destruct (type_dec t (expr_type e2)); [solve [subst; intuition idtac]|].
-  setoid_rewrite interp_expr_cast_different; eauto; reflexivity.
-Qed.
-
-Lemma equiv_under_same_type ctxt ctx e1 e2 :
-  expr_type e1 = expr_type e2 ->
-  Mequiv (interp_expr ctxt ctx e1)
-         (interp_expr_cast ctxt ctx e2 _) ->
-  equiv_under ctxt ctx e1 e2.
-Proof.
-  setoid_rewrite <-interp_expr_cast_expr_type.
-  cbv [equiv_under].
-  intros.
-  destruct (type_dec t (expr_type e1)).
-  - subst; eauto.
-  - setoid_rewrite interp_expr_cast_different; try congruence.
-    reflexivity.
-Qed.
 
 Local Instance equiv_equiv : Equivalence equiv.
 Proof.
@@ -538,6 +541,138 @@ Fixpoint bindings_ref (p : list operation) (n : nat) :=
 Definition expr_refs '((p, o) : expr) (n : nat) :=
   bindings_ref p n \/ op_refs o (length p + n).
 
+Fixpoint refsb (r : ref) (n : nat) :=
+  match r with
+  | ref_index k => n =? k
+  | ref_pair r1 r2 => refsb r1 n || refsb r2 n
+  end.
+
+Definition op_refsb (o : operation) (n : nat) :=
+  match o with
+  | op_unit => false
+  | op_app _ r | op_retapp _ r => refsb r n
+  end.
+
+Fixpoint bindings_refb (p : list operation) (n : nat) :=
+  match p with
+  | nil => false
+  | o :: p => op_refsb o n || bindings_refb p (S n)
+  end.
+
+Definition expr_refsb '((p, o) : expr) (n : nat) :=
+  bindings_refb p n || op_refsb o (length p + n).
+
+Lemma refsb_ref r i :
+  refsb r i = true <-> refs r i.
+Proof.
+  induction r; cbn [refs refsb].
+  - crush_deciders idtac.
+  - rewrite orb_true_iff; intuition idtac.
+Qed.
+
+Lemma op_refsb_ref o i :
+  op_refsb o i = true <-> op_refs o i.
+Proof.
+  destruct o; cbn [op_refs op_refsb];
+    eauto using refsb_ref;
+    intuition congruence.
+Qed.
+
+Lemma bindings_refb_ref p i :
+  bindings_refb p i = true <-> bindings_ref p i.
+Proof.
+  revert i; induction p as [|o p]; intros i;
+    cbn [bindings_refb bindings_ref];
+    try intuition congruence.
+  rewrite orb_true_iff;
+    rewrite op_refsb_ref;
+    specialize (IHp (S i));
+    intuition idtac.
+Qed.
+
+Fixpoint all_refsb (f : nat -> bool) (r : ref) : bool :=
+  match r with
+  | ref_index n => f n
+  | ref_pair r1 r2 => all_refsb f r1 && all_refsb f r2
+  end.
+
+Definition op_all_refsb (f : nat -> bool) (o : operation) : bool :=
+  match o with
+  | op_unit => true
+  | op_app _ r | op_retapp _ r => all_refsb f r
+  end.
+
+Fixpoint bindings_all_refb (f : nat -> bool) (p : list operation) : bool :=
+  match p with
+  | nil => true
+  | o :: p =>
+    op_all_refsb f o && bindings_all_refb (fun n => match n with
+                                                    | 0 => true
+                                                    | S n => f n
+                                                    end) p
+  end.
+
+Definition expr_all_refsb (f : nat -> bool) '((p, o) : expr) : bool :=
+  (bindings_all_refb f p)
+    && op_all_refsb (fun n => match n -? length p with
+                              | Some k => f k
+                              | None => true
+                              end) o.
+
+Lemma all_refsb_correct f r :
+  all_refsb f r = true ->
+  forall n, refs r n -> f n = true.
+Proof.
+  intros.
+  induction r; cbn [all_refsb refs] in *.
+  - congruence.
+  - rewrite andb_true_iff in *; intuition idtac.
+Qed.
+
+Lemma op_all_refsb_correct f o :
+  op_all_refsb f o = true ->
+  forall n, op_refs o n -> f n = true.
+Proof.
+  intros; destruct o; cbn [op_all_refsb op_refs] in *;
+    rewrite ?andb_true_iff in *; intuition idtac;
+      eapply all_refsb_correct; eauto with nocore.
+Qed.
+
+Lemma bindings_all_refb_correct f p :
+  bindings_all_refb f p = true ->
+  forall n, bindings_ref p n -> f n = true.
+Proof.
+  intros; revert dependent f; revert dependent n; induction p;
+    intros n Hn f Hf;
+    cbn [bindings_all_refb bindings_ref] in *;
+    intuition idtac;
+    rewrite ?andb_true_iff in *;
+    solve [(eapply op_all_refsb_correct +
+            eapply (IHp (S n) ltac:(eauto) (fun n => match n with
+                                                     | 0 => true
+                                                     | S n => f n
+                                                     end)));
+           intuition eauto with nocore].
+Qed.
+
+Lemma expr_all_refsb_correct f e :
+  expr_all_refsb f e = true ->
+  forall n, expr_refs e n -> f n = true.
+Proof.
+  destruct e as [p o];
+    cbn [expr_refs expr_all_refsb] in *;
+    rewrite ?andb_true_iff in *;
+    intros [? Ho] ? [?|?].
+  - eapply bindings_all_refb_correct; eauto with nocore.
+  - eapply op_all_refsb_correct in Ho; eauto with nocore.
+    match goal with
+    | _ : context[?a + ?b -? ?a] |- _ =>
+      let t := f_equal in
+      replace (a + b -? a) with (Some b) in * by
+          (crush_deciders t)
+    end; eauto with nocore.
+Qed.
+
 Lemma bindings_ref_app (p1 p2 : list operation) n :
   bindings_ref (p1 ++ p2) n <->
   bindings_ref p1 n \/ bindings_ref p2 (length p1 + n).
@@ -560,7 +695,7 @@ Qed.
 Lemma renumber_ref_ext f f' r :
   (forall i, f i = f' i) ->
   renumber_ref f r = renumber_ref f' r.
-Proof. intros; eapply renumber_ref_ext_relevant; eauto. Qed.
+Proof. eauto using renumber_ref_ext_relevant. Qed.
 
 Lemma renumber_op_ext_relevant f f' o :
   (forall i, op_refs o i -> f i = f' i) ->
@@ -573,7 +708,7 @@ Qed.
 Lemma renumber_op_ext f f' o :
   (forall i, f i = f' i) ->
   renumber_op f o = renumber_op f' o.
-Proof. intros; eapply renumber_op_ext_relevant; eauto. Qed.
+Proof. eauto using renumber_op_ext_relevant. Qed.
 
 Lemma renumber_bindings_ext_relevant f f' p :
   (forall i, bindings_ref p i -> f i = f' i) ->
@@ -589,24 +724,7 @@ Qed.
 Lemma renumber_bindings_ext f f' p :
   (forall i, f i = f' i) ->
   renumber_bindings f p = renumber_bindings f' p.
-Proof. intros; eapply renumber_bindings_ext_relevant; eauto. Qed.
-
-Lemma renumber_expr'_ext f f' acc p o' :
-  (forall i, f i = f' i) ->
-  renumber_expr' acc f p o' = renumber_expr' acc f' p o'.
-Proof.
-  revert acc f f'; induction p; intros acc f f' Hf;
-    cbn [renumber_expr'].
-  - erewrite renumber_op_ext; eauto.
-  - erewrite renumber_op_ext; eauto.
-    eapply IHp.
-    intros []; cbv [offset_renumbering optsub]; eauto.
-Qed.
-
-Lemma renumber_expr_ext f f' e :
-  (forall i, f i = f' i) ->
-  renumber_expr f e = renumber_expr f' e.
-Proof. destruct e; eapply renumber_expr'_ext. Qed.
+Proof. eauto using renumber_bindings_ext_relevant. Qed.
 
 Lemma offset_renumbering_plus a b n f :
   offset_renumbering (a + b) f n =
@@ -645,6 +763,29 @@ Lemma renumber_expr_renumber_bindings f p o' :
   (renumber_bindings f p,
    renumber_op (offset_renumbering (length p) f) o').
 Proof. eapply renumber_expr'_renumber_bindings. Qed.
+
+Lemma renumber_expr_ext_relevant f f' e :
+  (forall i, expr_refs e i -> f i = f' i) ->
+  renumber_expr f e = renumber_expr f' e.
+Proof.
+  destruct e as [p o];
+    repeat rewrite renumber_expr_renumber_bindings;
+    cbn [expr_refs].
+  intros.
+  rewrite renumber_bindings_ext_relevant with (f' := f') by
+    intuition eauto.
+  rewrite renumber_op_ext_relevant with
+      (f' := (offset_renumbering (length p) f')); eauto.
+  intros.
+  cbv [offset_renumbering];
+    let t := (subst; eauto) in
+    crush_deciders t.
+Qed.
+
+Lemma renumber_expr_ext f f' e :
+  (forall i, f i = f' i) ->
+  renumber_expr f e = renumber_expr f' e.
+Proof. eauto using renumber_expr_ext_relevant. Qed.
 
 Lemma renumber_bindings_app (f : nat -> nat) (p1 p2 : list operation) :
   renumber_bindings f (p1 ++ p2) =
@@ -749,11 +890,7 @@ Proof.
   destruct o; cbn [renumber_op op_type op_refs] in *;
     (step_Mequiv; [..|eapply Hk; eapply context_renumbered_1; eauto]);
     cbv [interp_op_silent interp_op];
-    erewrite lookup_renumbered_ref by
-        (eauto; cbv [offset_renumbering];
-         crush_deciders idtac;
-         subst;
-         eauto);
+    erewrite lookup_renumbered_ref by eauto;
     reflexivity.
 Qed.
 
@@ -776,11 +913,7 @@ Proof.
   destruct o; cbn [renumber_op op_type op_refs] in *;
     (step_Mequiv; [..|eapply Hk]);
     cbv [interp_op_silent interp_op];
-    erewrite lookup_renumbered_ref by
-        (eauto; cbv [offset_renumbering];
-         crush_deciders idtac;
-         subst;
-         eauto);
+    erewrite lookup_renumbered_ref by eauto;
     reflexivity.
 Qed.
 
@@ -1016,6 +1149,48 @@ Proof.
       right; eexists (S _); cbv [offset_renumbering optsub]; eauto.
 Qed.
 
+Lemma offset_eq_inv a f i j :
+  offset_renumbering a f i = a + j ->
+  i >= a /\ f (i - a) = j.
+Proof.
+  cbv [offset_renumbering]; crush_deciders subst.
+  match goal with
+  | |- context[?a + ?b - ?a] => replace (a + b - a) with b by omega
+  end; omega.
+Qed.
+
+Lemma expr_refs_renumber f e j :
+  expr_refs (renumber_expr f e) j <->
+  exists i, f i = j /\ expr_refs e i.
+Proof.
+  destruct e; rewrite renumber_expr_renumber_bindings;
+    cbn [expr_refs].
+  rewrite length_renumber.
+  setoid_rewrite bindings_ref_renumber.
+  setoid_rewrite op_refs_renumber.
+  split.
+  - intros [(?&?&?)|(?&?&?)].
+    + eexists.
+      intuition eauto.
+    + match goal with
+      | H : offset_renumbering _ _ _ = _ |- _ => eapply offset_eq_inv in H
+      end.
+      eexists; intuition eauto.
+      match goal with
+      | |- context[?a + (?b - ?a)] =>
+        replace (a + (b - a)) with b by omega
+      end; eauto.
+  - intros (?&?&[?|?]); eauto.
+    right.
+    eexists; split; eauto.
+    cbv [offset_renumbering].
+    let t :=
+        idtac; match goal with
+               | H : ?a + ?x = ?a + ?y |- _ =>
+                 assert (x = y) by omega; subst
+               end in crush_deciders t.
+Qed.
+
 Lemma renumber_id_ref r :
   renumber_ref (fun x => x) r = r.
 Proof. induction r; cbn [renumber_ref]; congruence. Qed.
@@ -1026,19 +1201,23 @@ Proof.
   destruct o; cbn [renumber_op]; try rewrite renumber_id_ref; congruence.
 Qed.
 
-Lemma renumber_id_expr' acc p o' :
-  renumber_expr' acc (fun x => x) p o' = (rev_append acc p, o').
+Lemma renumber_id_bindings p :
+  renumber_bindings (fun x => x) p = p.
 Proof.
-  revert acc; induction p; intros; cbn [renumber_expr']; listrew.
-  - rewrite renumber_id_op; eauto.
-  - rewrite renumber_id_op.
-    erewrite renumber_expr'_ext by (eapply offset_id).
-    rewrite IHp; listrew; eauto.
+  induction p; cbn [renumber_bindings]; eauto.
+  rewrite renumber_id_op.
+  erewrite renumber_bindings_ext by (eapply offset_id).
+  rewrite IHp; eauto.
 Qed.
 
 Lemma renumber_id_expr e :
   renumber_expr (fun x => x) e = e.
-Proof. destruct e; eapply renumber_id_expr'. Qed.
+Proof.
+  destruct e; rewrite renumber_expr_renumber_bindings.
+  rewrite renumber_id_bindings.
+  erewrite renumber_op_ext by (eapply offset_id);
+    rewrite renumber_id_op; eauto.
+Qed.
 
 Lemma commute_many ctxt (ctx : interp_type ctxt)
       (o : operation) (p : list operation)
@@ -1047,12 +1226,12 @@ Lemma commute_many ctxt (ctx : interp_type ctxt)
   (forall j,
       j < length p ->
       continuation_renumbered
-        (offset_renumbering j
-           (fun n => match n with
-                     | 0 => 1
-                     | 1 => 0
-                     | _ => n
-                     end)) tk (ks (S j)) (ks j)) ->
+        (offset_renumbering
+           j (fun n => match n with
+                       | 0 => 1
+                       | 1 => 0
+                       | _ => n
+                       end)) tk (ks (S j)) (ks j)) ->
   Mequiv (interp_bindings ctxt ctx (o :: p) tk (ks (length p)))
          (interp_bindings ctxt ctx
                           ((renumber_bindings pred p)
@@ -1128,6 +1307,660 @@ Ltac crush_Mequiv :=
          | |- _ => step_Mequiv
          end.
 
+Definition cycle_to_here_renumbering (from j : nat) : nat :=
+  if j =? from
+  then 0
+  else if j <? from
+       then S j
+       else j.
+
+Definition cycle (from to j : nat) : nat :=
+  if j =? from
+  then to
+  else if (to <=? j) && (j <? from)
+       then S j
+       else j.
+
+Lemma cycle_trivial n j :
+  cycle n n j = j.
+Proof.
+  cbv [cycle].
+  crush_deciders idtac.
+Qed.
+
+Lemma offset_cycle a b c j :
+  offset_renumbering b (cycle a c) j =
+  cycle (a + b) (c + b) j.
+Proof.
+  cbv [offset_renumbering cycle].
+  let t := (cbn [andb]) in crush_deciders t.
+Qed.
+
+Lemma cycle_S from to :
+  to < from ->
+  forall i,
+    cycle from to i =
+    offset_renumbering to
+                       (fun n => match n with
+                                 | 0 => 1
+                                 | 1 => 0
+                                 | _ => n
+                                 end)
+                       (cycle from (S to) i).
+Proof.
+  cbv [cycle offset_renumbering].
+  let t := (cbn [andb] in * ) in
+  crush_deciders t;
+    repeat match goal with
+           | |- context[match ?x with _ => _ end] => destruct x
+           end;
+    crush_deciders idtac.
+Qed.
+
+Definition cycle_expr_continuation ncommute e t j ctxt ctx :=
+  interp_expr_cast ctxt ctx
+                   (renumber_expr (cycle ncommute j) e)
+                   t.
+
+Lemma cycle_continuation_renumbered ncommute e t j :
+  j < ncommute ->
+  continuation_renumbered
+    (offset_renumbering j
+                        (fun n : nat => match n with
+                                        | 0 => 1
+                                        | 1 => 0
+                                        | S (S _) => n
+                                        end)) t
+    (cycle_expr_continuation ncommute e t (S j))
+    (cycle_expr_continuation ncommute e t j).
+Proof.
+  intros.
+  cbv [cycle_expr_continuation].
+  erewrite (renumber_expr_ext
+              _ _ _
+              ltac:(eapply (cycle_S ncommute j
+                                                ltac:(eauto)))).
+  rewrite renumber_renumber_expr with
+      (h :=
+         fun i =>
+           offset_renumbering j
+                              (fun n =>
+                                 match n with
+                                 | 0 => 1
+                                 | 1 => 0
+                                 | S (S _) => n
+                                 end)
+                              (cycle ncommute (S j) i))
+      (g := offset_renumbering j
+                               (fun n : nat => match n with
+                                               | 0 => 1
+                                               | 1 => 0
+                                               | S (S _) => n
+                                               end))
+      (f := cycle ncommute (S j))
+    by reflexivity.
+  eapply interp_renumbered_expr.
+Qed.
+
+Definition context_omits (f : nat -> option nat)
+           ctxt (ctx : interp_type ctxt)
+           ctxt' (ctx' : interp_type ctxt') : Prop :=
+  forall i t,
+    match f i with
+    | Some j => lookup ctxt' ctx' j t = lookup ctxt ctx i t
+    | None => True
+    end.
+
+Definition continuation_omits (f : nat -> option nat)
+           tk (k k' : forall ctxt, interp_type ctxt -> M tk) : Prop :=
+  forall ctxt (ctx : interp_type ctxt) ctxt' (ctx' : interp_type ctxt'),
+    context_omits f ctxt ctx ctxt' ctx' ->
+    Mequiv (k ctxt ctx) (k' ctxt' ctx').
+
+Lemma assoc_op ctxt (ctx : interp_type ctxt) o
+      tm (m : interp_type (op_type o * ctxt) -> M tm)
+      tk (k k' : forall ctxt, interp_type ctxt -> M tk) :
+  continuation_omits (fun n =>
+                        match n with
+                        | 0 => Some 0
+                        | 1 => None
+                        | S n => Some n
+                        end) tk k k' ->
+  Mequiv
+    (Mbind (interp_op_silent ctxt ctx o)
+           (fun x =>
+              Mbind (m (x, ctx))
+                    (fun y => k (tm * (op_type o * ctxt))%etype
+                                (y, (x, ctx)))))
+    (Mbind (Mbind (interp_op_silent ctxt ctx o)
+                  (fun x => m (x, ctx)))
+           (fun y => k' (tm * ctxt)%etype
+                        (y, ctx))).
+Proof.
+  intros Hkk'; crush_Mequiv; eapply Hkk'.
+  intros [|[|[]]] ?; reflexivity.
+Qed.
+
+Definition offset_omission offset f n :=
+  match n -? offset with
+  | Some k => match f k with
+              | Some k' => Some (offset + k')
+              | None => None
+              end
+  | None => Some n
+  end.
+
+Lemma assoc_many ctxt (ctx : interp_type ctxt) p
+      tm (m : forall ctxt, interp_type ctxt -> M tm)
+      tk (ks : nat -> forall ctxt, interp_type ctxt -> M tk) :
+  (forall j,
+      j < length p ->
+      continuation_omits
+        (fun n => match n with
+                  | 0 => Some 0
+                  | 1 => None
+                  | S n => Some n
+                  end) tk (ks (S j)) (ks j)) ->
+  Mequiv
+    (interp_bindings
+       ctxt ctx p tk
+       (fun ctxt ctx =>
+          Mbind (m ctxt ctx)
+                (fun y => (ks (length p) (tm * ctxt)%etype (y, ctx)))))
+    (Mbind (interp_bindings ctxt ctx p tm m)
+           (fun y => ks 0 (tm * ctxt)%etype (y, ctx))).
+Proof.
+  intros Hk.
+  rewrite bind_interp_bindings.
+  revert Hk m;
+    pattern p; revert p; eapply rev_ind; [|intros o p IHp];
+      intros Hk m.
+  { reflexivity. }
+  listrew.
+  specialize (IHp (ltac:(intros; eapply Hk; omega))
+                  (fun _ ctx =>
+                     Mbind (interp_op_silent _ ctx o)
+                           (fun x => m (_ * _)%etype (x, ctx)))).
+  specialize (Hk (length p) ltac:(omega)).
+  repeat rewrite interp_bindings_app; cbn [interp_bindings].
+  etransitivity; [|etransitivity]; [|eapply IHp|]; clear IHp;
+    [|solve [crush_Mequiv]].
+  eapply interp_bindings_Mequiv; intros ??.
+  eapply assoc_op; eauto.
+Qed.
+
+Definition ref_omits (f : nat -> option nat) r :=
+  forall i, refs r i -> f i <> None.
+
+Definition op_omits (f : nat -> option nat) o :=
+  forall i, op_refs o i -> f i <> None.
+
+Definition bindings_omit (f : nat -> option nat) p :=
+  forall i, bindings_ref p i -> f i <> None.
+
+Definition expr_omits (f : nat -> option nat) e :=
+  forall i, expr_refs e i -> f i <> None.
+
+Definition expr_omits_range n e :=
+  forall i, expr_refs e i -> i = 0 \/ S n <= i.
+
+Definition expr_omits_rangeb n e :=
+  expr_all_refsb (fun i => (i =? 0) ||
+                           (S n <=? i)) e.
+
+Lemma expr_omits_rangeb_correct n e :
+  expr_omits_rangeb n e = true -> expr_omits_range n e.
+Proof.
+  cbv [expr_omits_rangeb expr_omits_range]; intros He ??.
+  eapply expr_all_refsb_correct in He; eauto.
+  revert He; crush_deciders idtac.
+Qed.
+
+Definition silence_omission (f : nat -> option nat) j :=
+  match f j with
+  | Some x => x
+  | None => 0
+  end.
+
+Lemma lookup_omitted_ref ctxt ctx ctxt' ctx' f r t :
+  context_omits f ctxt ctx ctxt' ctx' ->
+  ref_omits f r ->
+  lookup_ref ctxt' ctx' (renumber_ref (silence_omission f) r) t =
+  lookup_ref ctxt ctx r t.
+Proof.
+  cbv [context_omits ref_omits silence_omission].
+  intros Hctx Hr.
+  revert t; induction r as [i|r1 IHr1 r2 IHr2]; intros t;
+    cbn [lookup_ref renumber_ref refs] in *.
+  - specialize (Hctx i t).
+    specialize (Hr _ ltac:(eauto)).
+    destruct (f i); congruence.
+  - destruct t; eauto.
+    erewrite IHr1, IHr2 by eauto; reflexivity.
+Qed.
+
+Lemma context_omits_1 f ctxt ctx ctxt' ctx' t (x : interp_type t) :
+  context_omits f ctxt ctx ctxt' ctx' ->
+  context_omits (offset_omission 1 f) (_ * _) (x, ctx) (_ * _) (x, ctx').
+Proof.
+  cbv [context_omits offset_omission]; intros Hf.
+  let t := (repeat multimatch goal with
+                   | |- context[f ?x] => specialize (Hf x); destruct (f x)
+                   | _ => change (1 + ?y) with (S y)
+                   | H : ?x < 1 |- _ => assert (x = 0) by omega; clear H
+                   | _ => cbn [lookup]
+                   | _ => subst
+                   end) in crush_deciders t.
+Qed.
+
+Lemma interp_omitted_op f o tk
+      (k k' : forall ctxt, interp_type ctxt -> M tk) :
+  op_omits f o ->
+  continuation_omits (offset_omission 1 f) tk k k' ->
+  continuation_omits
+    f tk
+    (fun _ ctx =>
+       (Mbind (interp_op_silent _ ctx o)
+              (fun x => k (_ * _)%etype (x, ctx))))
+    (fun _ ctx =>
+       (Mbind
+          (interp_op_silent _ ctx
+                            (renumber_op (silence_omission f) o))
+          (fun x => k' (_ * _)%etype (x, ctx)))).
+Proof.
+  intros ? Hk ?????.
+  destruct o; cbn [renumber_op op_type op_refs] in *;
+    (step_Mequiv; [..|eapply Hk; eapply context_omits_1; eauto]);
+      cbv [interp_op_silent interp_op];
+      erewrite lookup_omitted_ref by eauto;
+      reflexivity.
+Qed.
+
+Lemma interp_omitted_op_no_ctx f o tk
+      (k k' : forall t, interp_type t -> M tk) :
+  op_omits f o ->
+  (forall t x, Mequiv (k t x) (k' t x)) ->
+  continuation_omits
+    f tk
+    (fun ctxt ctx =>
+       (Mbind (interp_op_silent ctxt ctx o)
+              (fun x => k (op_type o) x)))
+    (fun ctxt ctx =>
+       (Mbind
+          (interp_op_silent ctxt ctx
+                            (renumber_op (silence_omission f) o))
+          (fun x => k'
+                      (op_type (renumber_op (silence_omission f) o)) x))).
+Proof.
+  intros ? Hk ?????.
+  destruct o; cbn [renumber_op op_type op_refs] in *;
+    (step_Mequiv; [..|eapply Hk; eapply context_omits_1; eauto]);
+      cbv [interp_op_silent interp_op];
+      erewrite lookup_omitted_ref by eauto;
+      reflexivity.
+Qed.
+
+Lemma offset_omission_0 f i : offset_omission 0 f i = f i.
+Proof.
+  cbv [offset_omission].
+  crush_deciders idtac.
+  subst; cbn [plus].
+  destruct (f _); eauto.
+Qed.
+
+Lemma context_omits_ext f1 f2 ctxt ctx ctxt' ctx' :
+  (forall i, f1 i = f2 i) ->
+  context_omits f1 ctxt ctx ctxt' ctx' <->
+  context_omits f2 ctxt ctx ctxt' ctx'.
+Proof. intros H; cbv [context_omits]; setoid_rewrite H; reflexivity. Qed.
+
+Lemma continuation_omits_ext f1 f2 tk k k' :
+  (forall i, f1 i = f2 i) ->
+  continuation_omits f1 tk k k' ->
+  continuation_omits f2 tk k k'.
+Proof.
+  intros H Hk ?????.
+  eapply Hk.
+  erewrite context_omits_ext; eauto.
+Qed.
+
+Local Instance continuation_omits_Mequiv f tk :
+  Proper
+    (forall_relation
+       (fun ctxt => pointwise_relation (interp_type ctxt) Mequiv) ==>
+     forall_relation
+       (fun ctxt => pointwise_relation (interp_type ctxt) Mequiv) ==>
+     iff) (continuation_omits f tk).
+Proof.
+  cbv [Proper respectful forall_relation pointwise_relation Basics.impl].
+  cbv [continuation_omits].
+  intros; split; intros.
+  - etransitivity; [symmetry; eauto|];
+      etransitivity; [|eauto]; eauto.
+  - etransitivity; [|symmetry; eauto];
+      etransitivity; [eauto|]; eauto.
+Qed.
+
+Lemma bindings_omit_app_invl f p1 p2 :
+  bindings_omit f (p1 ++ p2) -> bindings_omit f p1.
+Proof.
+  cbv [bindings_omit].
+  intros Ha.
+  setoid_rewrite bindings_ref_app in Ha.
+  intuition eauto.
+Qed.
+
+Lemma bindings_omit_app_invr f p1 p2 :
+  bindings_omit f (p1 ++ p2) ->
+  bindings_omit (offset_omission (length p1) f) p2.
+Proof.
+  cbv [bindings_omit offset_omission].
+  intros Ha.
+  setoid_rewrite bindings_ref_app in Ha.
+  intros i ?.
+  crush_deciders idtac.
+  match goal with
+  | _ : context[f ?x] |- _ => specialize (Ha x)
+  end.
+  subst.
+  destruct (f _); eauto; congruence.
+Qed.
+
+Lemma offset_silence n f i :
+  offset_omission n f i <> None ->
+  offset_renumbering n (silence_omission f) i =
+  silence_omission (offset_omission n f) i.
+Proof.
+  intros.
+  cbv [offset_renumbering silence_omission offset_omission] in *.
+  let t := (destruct (f _)) in crush_deciders t.
+Qed.
+
+Lemma offset_offset_omission a b f i :
+  offset_omission (a + b) f i =
+  offset_omission a (offset_omission b f) i.
+Proof.
+  cbv [offset_omission].
+  crush_deciders idtac.
+  subst.
+  match goal with
+  | H : ?x + ?y + ?z = ?x + (?y + ?z') |- _ =>
+    assert (z = z') by omega; clear H; subst
+  end.
+  destruct (f _); f_equal; omega.
+Qed.
+
+Lemma interp_omitted_bindings f p
+      tk (k k' : forall ctxt : type, interp_type ctxt -> M tk) :
+  bindings_omit f p ->
+  continuation_omits (offset_omission (length p) f) tk k k' ->
+  continuation_omits
+    f tk
+    (fun ctxt ctx => interp_bindings ctxt ctx p tk k)
+    (fun ctxt ctx =>
+       interp_bindings ctxt ctx
+                       (renumber_bindings (silence_omission f) p) tk k').
+Proof.
+  revert tk k k'.
+  pattern p; revert p; eapply rev_ind;
+    cbn [renumber_bindings interp_bindings length offset_renumbering
+                           optsub plus]; [|intros o p IHp];
+      intros tk k k' Hp Hkk'.
+  { eapply continuation_omits_ext in Hkk';
+      try solve [eapply offset_omission_0].
+      eapply Hkk'. }
+  rewrite renumber_bindings_app.
+  cbn [renumber_bindings].
+  setoid_rewrite interp_bindings_app.
+  pose proof (bindings_omit_app_invl _ _ _ Hp).
+  pose proof (bindings_omit_app_invr _ _ _ Hp).
+  cbv [bindings_omit] in *; cbn [bindings_ref] in *.
+  clear Hp.
+  eapply IHp; eauto; cbn [interp_bindings].
+  intros ?????.
+  rewrite renumber_op_ext_relevant with
+      (f := (offset_renumbering (length p) (silence_omission f)))
+      (f' := (silence_omission (offset_omission (length p) f)))
+      by (eauto using offset_silence).
+
+  eapply interp_omitted_op; try solve [eauto |
+                                       cbv [op_omits]; intuition eauto].
+  listrew.
+  eapply continuation_omits_ext;
+    try eapply offset_offset_omission; eauto.
+Qed.
+
+Lemma interp_omitted_expr f t (e : expr) :
+  expr_omits f e ->
+  continuation_omits
+    f t
+    (fun ctxt ctx => interp_expr_cast ctxt ctx e t)
+    (fun ctxt ctx =>
+       interp_expr_cast ctxt ctx (renumber_expr (silence_omission f) e) t).
+Proof.
+  intros He ?????.
+  destruct e as [p o].
+  cbv [expr_omits expr_refs] in *.
+  rewrite renumber_expr_renumber_bindings.
+  erewrite renumber_op_ext_relevant; cycle 1.
+  { intros i ?.
+    eapply offset_silence.
+    cbv [offset_omission].
+    crush_deciders subst.
+    match goal with
+    | _ : context[f ?x] |- _ => specialize (He x)
+    end.
+    destruct (f _); eauto; congruence. }
+  cbv [interp_expr_cast interp_expr].
+  setoid_rewrite bind_interp_bindings.
+  eapply interp_omitted_bindings;
+    try solve [eauto | cbv [bindings_omit]; intuition eauto].
+  refine (interp_omitted_op_no_ctx
+            _ _ _
+            (fun _ x => Mret (cast t x))
+            (fun _ x => Mret (cast t x))
+            _ _).
+  { intros i ?.
+    cbv [offset_omission].
+    crush_deciders subst.
+    intros.
+    match goal with
+    | _ : context[f ?x] |- _ => specialize (He x)
+    end.
+    destruct (f _); eauto; congruence. }
+  reflexivity.
+Qed.
+
+Definition shift from to i := if i <? from
+                              then 0
+                              else i - from + to.
+
+Definition shift_expr_continuation e t total j ctxt ctx :=
+  interp_expr_cast ctxt ctx (renumber_expr (shift (S (total - j)) 1) e) t.
+
+Lemma shift_S from i :
+  shift (S from) 1 i =
+  (silence_omission (fun n => match n with
+                              | 0 => Some 0
+                              | 1 => None
+                              | S n => Some n
+                              end))
+    (shift from 1 i).
+Proof.
+  cbv [shift silence_omission].
+  let t :=
+      idtac; multimatch goal with
+             | |- context[match ?x with _ => _ end] =>
+               lazymatch x with
+               | context[match _ with _ => _ end] => fail
+               | _ => idtac
+               end;
+               let x' := fresh "x" in remember x as x'; destruct x'
+             end in
+  crush_deciders t.
+Qed.
+
+Lemma shift_continuation_omitted e t total j :
+  j < total ->
+  expr_omits_range total e ->
+  continuation_omits
+    (fun n => match n with
+              | 0 => Some 0
+              | 1 => None
+              | S n => Some n
+              end) t
+    (shift_expr_continuation e t total (S j))
+    (shift_expr_continuation e t total j).
+Proof.
+  cbv [shift_expr_continuation]; intros ? He.
+  replace (S (total - j)) with (S (S (total - S j))) by omega.
+  erewrite (renumber_expr_ext
+              _ _ _ ltac:(eapply (shift_S (S (total - S j))))).
+  rewrite renumber_renumber_expr with
+      (h := (fun i =>
+               silence_omission
+                 (fun n =>
+                    match n with
+                    | 0 => Some 0
+                    | 1 => None
+                    | S n => Some n
+                    end) (shift (S (total - S j)) 1 i)))
+      (g := silence_omission
+              (fun n =>
+                 match n with
+                 | 0 => Some 0
+                 | 1 => None
+                 | S n => Some n
+                 end))
+      (f := (shift (S (total - S j)) 1))
+      by reflexivity.
+  eapply interp_omitted_expr.
+  cbv [expr_omits expr_omits_range].
+  intros i Hi.
+  eapply expr_refs_renumber in Hi; destruct Hi as (x&?&?).
+  subst.
+  enough (shift (S (total - S j)) 1 x <> 1) by
+      (destruct (shift (S (total - S j)) 1 x) as [|[|]]; congruence).
+  destruct e; cbv [expr_omits_range] in *.
+  specialize (He _ ltac:(eauto)).
+  cbv [shift].
+  destruct He; crush_deciders idtac.
+Qed.
+
+Lemma equiv_prefix l p o p' o' :
+  equiv (p, o) (p', o') ->
+  equiv (l ++ p, o) (l ++ p', o').
+Proof.
+  cbv [equiv equiv_under interp_expr_cast interp_expr].
+  intros H ???.
+  crush_Mequiv.
+  etransitivity; [|etransitivity]; [|eapply H|];
+    crush_Mequiv.
+Qed.
+
+Lemma shift_trivial i : shift 1 1 i = i.
+Proof. cbv [shift]; crush_deciders idtac. Qed.
+
+Lemma offset_1_shift from to i :
+  i = 0 \/ i > from ->
+  offset_renumbering 1 (shift from to) i = shift (S from) (S to) i.
+Proof. cbv [shift offset_renumbering]; crush_deciders idtac. Qed.
+
+Lemma shift_shift a b c i :
+  b <> 0 ->
+  shift b c (shift a b i) = shift a c i.
+Proof.
+  cbv [shift]; crush_deciders idtac.
+Qed.
+
+Lemma shift_expr_continuation_shift t ctxt ctx s so n n' :
+  expr_omits_range n (s, so) ->
+  Mequiv
+    (shift_expr_continuation (s, so) t n 0 ctxt ctx)
+    (shift_expr_continuation
+       (renumber_expr (offset_renumbering 1 (shift n n')) (s, so))
+       t n' 0 ctxt ctx).
+Proof.
+  intros.
+  erewrite (renumber_expr_ext_relevant
+              _ _ _ ltac:(intros; rewrite offset_1_shift; eauto)).
+  cbv [shift_expr_continuation].
+  repeat (evar (x : nat); subst x; replace (?x - 0) with (?x) by omega).
+  erewrite <-renumber_renumber_expr.
+  - reflexivity.
+  - intros.
+    rewrite shift_shift; omega.
+Qed.
+
+Lemma omit_range_shift n n' e :
+  expr_omits_range n e ->
+  expr_omits_range n' (renumber_expr (offset_renumbering 1 (shift n n')) e).
+Proof.
+  cbv [expr_omits_range].
+  setoid_rewrite expr_refs_renumber.
+  intros H ?(?&?&?); subst.
+  specialize (H _ ltac:(eauto)).
+  cbv [offset_renumbering shift]; crush_deciders idtac.
+Qed.
+
+Lemma equiv_suffix p o p' o' s so s' so' :
+  op_type o = op_type o' ->
+  expr_omits_range (length p) (s, so) ->
+  (s', so') = renumber_expr
+                (offset_renumbering 1 (shift (length p) (length p')))
+                (s, so) ->
+  equiv (p, o) (p', o') ->
+  equiv (p ++ o :: s, so) (p' ++ o' :: s', so').
+  intros ???.
+  intros Hpp'.
+  assert (expr_omits_range (length p') (s', so'))
+         by (replace (s', so'); eauto using omit_range_shift).
+  cbv [equiv equiv_under interp_expr_cast interp_expr].
+  intros.
+  crush_Mequiv.
+
+  etransitivity; etransitivity; [..|etransitivity];
+    [|
+     solve [eapply assoc_many
+              with (p := p)
+                   (m := (fun ctxt ctx => interp_op_silent ctxt ctx o))
+                   (ks := shift_expr_continuation (s, so) t
+                                                  (length p));
+            intros; eapply shift_continuation_omitted; eauto]
+     | |
+     solve [symmetry;
+            eapply assoc_many
+              with (p := p')
+                   (m := (fun ctxt ctx => interp_op_silent ctxt ctx o'))
+                   (ks := shift_expr_continuation (s', so') t
+                                                  (length p'));
+            intros; eapply shift_continuation_omitted; eauto]
+     |]; cycle 1;
+      [|cbv [shift_expr_continuation interp_expr_cast interp_expr];
+        replace (length _ - length _) with 0 by omega;
+        erewrite renumber_expr_ext by (eapply shift_trivial);
+        rewrite renumber_id_expr;
+        crush_Mequiv ..].
+
+  etransitivity; [|etransitivity];
+    [|eapply Mequiv_Mbind_cast
+             with
+               (c2 :=
+                  fun tx (x : interp_type tx) =>
+                    (shift_expr_continuation (s, so) t (length p) 0
+                                             (tx * ctxt) (x, ctx)))
+               (c2' :=
+                  fun tx (x : interp_type tx) =>
+                    (shift_expr_continuation (s', so') t (length p') 0
+                                             (tx * ctxt) (x, ctx)));
+      [eauto|eapply Hpp'|]|]; cycle 1;
+      [|solve [cbv [interp_expr_cast interp_expr expr_type];
+               crush_Mequiv] ..].
+  intros.
+  replace (s', so').
+  eapply shift_expr_continuation_shift; eauto.
+Qed.
+
 Module Rewriter.
   Inductive error :=
   | E_debug {t : Type} (_ : t)
@@ -1179,9 +2012,9 @@ Module Rewriter.
      *   X check the legality of the cycles
      *   X prove the cycle-checker correct
      *   X run the cycles individually
-     *   + run the strict matcher
+     *   X run the strict matcher
      *     (could prove that it always succeeds but that would be hard)
-     *   + rewrite the lemma
+     *   X rewrite the lemma
      * - reification
      *   + reify to PHOAS first, then to flat structure
      * - support for ret
@@ -1275,55 +2108,6 @@ Module Rewriter.
                (lhead phead : operation) : map * map + error :=
       map_match' lbinds pbinds lhead phead 0 0 empty empty.
 
-    Fixpoint refsb (r : ref) (n : nat) :=
-      match r with
-      | ref_index k => n =? k
-      | ref_pair r1 r2 => refsb r1 n || refsb r2 n
-      end.
-
-    Definition op_refsb (o : operation) (n : nat) :=
-      match o with
-      | op_unit => false
-      | op_app _ r | op_retapp _ r => refsb r n
-      end.
-
-    Fixpoint bindings_refb (p : list operation) (n : nat) :=
-      match p with
-      | nil => false
-      | o :: p => op_refsb o n || bindings_refb p (S n)
-      end.
-
-    Definition expr_refsb '((p, o) : expr) (n : nat) :=
-      bindings_refb p n || op_refsb o (length p + n).
-
-    Lemma refsb_ref r i :
-      refsb r i = true <-> refs r i.
-    Proof.
-      induction r; cbn [refs refsb].
-      - crush_deciders idtac.
-      - rewrite orb_true_iff; intuition idtac.
-    Qed.
-
-    Lemma op_refsb_ref o i :
-      op_refsb o i = true <-> op_refs o i.
-    Proof.
-      destruct o; cbn [op_refs op_refsb];
-        eauto using refsb_ref;
-        intuition congruence.
-    Qed.
-
-    Lemma bindings_refb_ref p i :
-      bindings_refb p i = true <-> bindings_ref p i.
-    Proof.
-      revert i; induction p as [|o p]; intros i;
-        cbn [bindings_refb bindings_ref];
-        try intuition congruence.
-      rewrite orb_true_iff;
-        rewrite op_refsb_ref;
-        specialize (IHp (S i));
-        intuition idtac.
-    Qed.
-
     Definition check_no_capturing_tail (ptail : list operation)
                (prog_end : operation)
                (prog2lem : map) : unit + error :=
@@ -1335,106 +2119,11 @@ Module Rewriter.
                      else ok tt)
               (ok tt) prog2lem.
 
-    Definition cycle_to_here_renumbering (from j : nat) : nat :=
-      if j =? from
-      then 0
-      else if j <? from
-           then S j
-           else j.
-
-    Definition cycle_renumbering (from to j : nat) : nat :=
-      if j =? from
-      then to
-      else if (to <=? j) && (j <? from)
-           then S j
-           else j.
-
-    Lemma cycle_renumbering_trivial n j :
-      cycle_renumbering n n j = j.
-    Proof.
-      cbv [cycle_renumbering].
-      crush_deciders idtac.
-    Qed.
-
-    Lemma offset_cycle_renumbering a b c j :
-      offset_renumbering b (cycle_renumbering a c) j =
-      cycle_renumbering (a + b) (c + b) j.
-    Proof.
-      cbv [offset_renumbering cycle_renumbering].
-      let t := (cbn [andb]) in crush_deciders t.
-    Qed.
-
-    Definition cycle_expr_continuation ncommute e t j ctxt ctx :=
-      interp_expr_cast ctxt ctx
-                       (renumber_expr (cycle_renumbering ncommute j) e)
-                       t.
-
-    Lemma cycle_renumbering_S from to :
-      to < from ->
-      forall i,
-        cycle_renumbering from to i =
-        offset_renumbering to
-                           (fun n => match n with
-                                     | 0 => 1
-                                     | 1 => 0
-                                     | _ => n
-                                     end)
-                           (cycle_renumbering from (S to) i).
-    Proof.
-      cbv [cycle_renumbering offset_renumbering].
-      let t := (cbn [andb] in * ) in
-      crush_deciders t;
-        repeat match goal with
-               | |- context[match ?x with _ => _ end] => destruct x
-               end;
-        crush_deciders idtac.
-    Qed.
-
-    Lemma cycle_expr_continuation_renumbering ncommute e t j :
-      j < ncommute ->
-      continuation_renumbered
-        (offset_renumbering j
-                            (fun n : nat => match n with
-                                            | 0 => 1
-                                            | 1 => 0
-                                            | S (S _) => n
-                                            end)) t
-        (cycle_expr_continuation ncommute e t (S j))
-        (cycle_expr_continuation ncommute e t j).
-    Proof.
-      intros.
-      cbv [cycle_expr_continuation].
-      erewrite (renumber_expr_ext
-                  _ _ _
-                  ltac:(eapply (cycle_renumbering_S ncommute j
-                                                    ltac:(eauto)))).
-      rewrite renumber_renumber_expr with
-          (h :=
-             fun i =>
-               offset_renumbering j
-                                  (fun n =>
-                                     match n with
-                                     | 0 => 1
-                                     | 1 => 0
-                                     | S (S _) => n
-                                     end)
-                                  (cycle_renumbering ncommute (S j) i))
-          (g := offset_renumbering j
-                                   (fun n : nat => match n with
-                                                   | 0 => 1
-                                                   | 1 => 0
-                                                   | S (S _) => n
-                                                   end))
-          (f := cycle_renumbering ncommute (S j))
-          by reflexivity.
-      eapply interp_renumbered_expr.
-    Qed.
-
     Definition renumber_lem2prog (lem2prog : map) (pi li : nat) :=
       fold_ac _ (fun lj pj lem2prog =>
                    if pj =? pi
                    then lem2prog
-                   else add lj (cycle_renumbering pi li pj) lem2prog)
+                   else add lj (cycle pi li pj) lem2prog)
               empty lem2prog.
 
     Fixpoint generate_cycles' lem2prog (cycles : list (nat * nat))
@@ -1519,13 +2208,16 @@ Module Rewriter.
       end.
 
     Fixpoint cycles_phead_ptail (cycles : list (nat * nat))
-             (phead_ptail : list operation) : list operation :=
+             (phead : operation) (ptail : list operation)
+      : operation * list operation :=
       match cycles with
-      | nil => phead_ptail
+      | nil => (phead, ptail)
       | (from, to) :: cycles =>
-        cycles_phead_ptail cycles
-                          (renumber_bindings (cycle_renumbering from to)
-                                             phead_ptail)
+        cycles_phead_ptail
+          cycles
+          (renumber_op (cycle from to) phead)
+          (renumber_bindings
+             (offset_renumbering 1 (cycle from to)) ptail)
       end.
 
     Fixpoint cycles_prog_end (len_ptail : nat) (cycles : list (nat * nat))
@@ -1535,13 +2227,20 @@ Module Rewriter.
       | (from, to) :: cycles =>
         cycles_prog_end len_ptail
           cycles (renumber_op (offset_renumbering (S len_ptail)
-                                                 (cycle_renumbering from to))
+                                                 (cycle from to))
                              prog_end)
       end.
 
+    Definition assemble (pbinds : list operation)
+               (phead : operation) (ptail : list operation)
+               (prog_end : operation) :=
+      (rev_append pbinds (phead :: ptail), prog_end).
+
     Definition commute_matches (lbinds : list operation)
                (lhead : operation) (e : expr) :
-      list (nat * ((list operation * operation) + error)) :=
+      (* returns pbinds, phead, ptail, prog_end *)
+      list (nat * ((list operation * operation *
+                    list operation * operation) + error)) :=
       (* match base has the form:
        * (tail (normal order), head, binds (reversed order)) *)
       let '(prog, prog_end) := e in
@@ -1556,13 +2255,15 @@ Module Rewriter.
               _ <-! check_no_capturing_tail ptail prog_end prog2lem;
               cycles <-! generate_cycles lem2prog len_lbinds;
               new_pbinds <-! cycles_pbinds cycles pbinds;
-              ok (rev_append new_pbinds
-                             (cycles_phead_ptail cycles (phead :: ptail)),
+              let '(new_phead, new_ptail) :=
+                  cycles_phead_ptail cycles phead ptail in
+              ok (new_pbinds, new_phead, new_ptail,
                   cycles_prog_end len_ptail cycles prog_end)))
         match_bases.
 
     Ltac step_err_bind :=
       lazymatch goal with
+      | H : raise _ = ok _ |- _ => congruence
       | H : ?e = ok _ |- _ =>
         lazymatch e with
         | x <-! ?y; ?z =>
@@ -1575,22 +2276,26 @@ Module Rewriter.
           | unit => destruct x
           | _ => idtac
           end
-        | ok _ => inversion_clear H
+        | ok _ => inversion H; clear H
         end
+      | H : ok _ = ?e |- _ =>
+        symmetry in H
       end.
 
     Lemma commute_matches_correct lbinds lhead e :
-      Forall (fun '(_, err) => match err with
-                             | ok new_p =>
-                               equiv e new_p
-                             | raise _ => True
-                             end)
+      Forall (fun '(_, err) =>
+                match err with
+                | ok (new_pbinds, new_phead, new_ptail, new_prog_end) =>
+                  equiv e
+                        (assemble new_pbinds new_phead new_ptail new_prog_end)
+                | raise _ => True
+                end)
              (commute_matches lbinds lhead e).
       destruct e as [prog prog_end].
       cbv [commute_matches].
       rewrite Forall_forall.
       setoid_rewrite in_map_iff.
-      intros [n [[new_prog new_prog_end]|]]
+      intros [n [[[[new_pbinds' new_phead'] new_ptail'] new_prog_end']|]]
              ([[ptail phead] pbinds]&H&?); eauto.
       inversion H; clear dependent n.
 
@@ -1598,6 +2303,11 @@ Module Rewriter.
         cbn [err_bind] in *; [|congruence].
 
       repeat step_err_bind.
+      let c := constr:(cycles_phead_ptail cycles phead ptail) in
+      replace c with (fst c, snd c) in * by (destruct c; eauto).
+      repeat step_err_bind.
+      subst new_pbinds' new_phead' new_ptail' new_prog_end'.
+      cbv [assemble].
 
       match goal with
       | H : context[check_no_capturing_tail] |- _ => clear H
@@ -1626,10 +2336,12 @@ Module Rewriter.
         intros ctxt ctx t;
         crush_Mequiv.
 
-      revert dependent new_pbinds; revert pbinds phead ptail prog_end;
+      revert dependent new_pbinds;
+        revert pbinds phead ptail prog_end;
         induction cycles as [|[from to] cycles];
-        intros pbinds phead ptail prog_end new_pbinds Hnew_pbinds;
-        cbn [cycles_phead_ptail cycles_prog_end cycles_pbinds] in *.
+        intros pbinds phead ptail prog_end
+               new_pbinds Hnew_pbinds;
+        cbn [cycles_phead_ptail fst snd cycles_prog_end cycles_pbinds] in *.
       { inversion_clear Hnew_pbinds; reflexivity. }
 
       match goal with
@@ -1661,22 +2373,22 @@ Module Rewriter.
                                  ++ (renumber_bindings pred middle)
                                  ++ renumber_op (plus (length middle)) from_op
                                  :: (renumber_bindings
-                                       (cycle_renumbering (length middle) 0)
+                                       (cycle (length middle) 0)
                                        coda)))
                            (renumber_op
                               (offset_renumbering
                                  (length coda)
-                                 (cycle_renumbering (length middle) 0))
+                                 (cycle (length middle) 0))
                               phead)
                            (renumber_bindings
                               (offset_renumbering
                                  (S (length coda))
-                                 (cycle_renumbering (length middle) 0))
+                                 (cycle (length middle) 0))
                               ptail)
                            (renumber_op
                               (offset_renumbering
                                  (S (length coda) + length ptail)
-                                 (cycle_renumbering (length middle) 0))
+                                 (cycle (length middle) 0))
                               prog_end)
                            new_pbinds).
       listrew.
@@ -1700,7 +2412,7 @@ Module Rewriter.
           set (ks j ctxt ctx :=
                  interp_expr_cast ctxt ctx
                                   (renumber_expr
-                                     (cycle_renumbering (length middle) j)
+                                     (cycle (length middle) j)
                                      (coda ++ phead :: ptail, prog_end))
                                   t).
 
@@ -1712,14 +2424,14 @@ Module Rewriter.
           * cbv [cycle_expr_continuation].
 
             crush_Mequiv.
-            erewrite renumber_expr_ext by (eapply cycle_renumbering_trivial).
+            erewrite renumber_expr_ext by (eapply cycle_trivial).
             rewrite renumber_id_expr.
             cbv [interp_expr_cast interp_expr].
             crush_Mequiv.
           * pose proof bindings_refb_ref middle 0;
               intuition congruence.
           * intros.
-            eapply cycle_expr_continuation_renumbering; eauto.
+            eapply cycle_continuation_renumbered; eauto.
         + cbv [cycle_expr_continuation].
           replace (length middle).
           crush_Mequiv.
@@ -1742,10 +2454,10 @@ Module Rewriter.
       - crush_Mequiv.
         replace (length coda).
         cbn [renumber_bindings].
-        erewrite renumber_op_ext by (eapply offset_cycle_renumbering).
+        erewrite renumber_op_ext by (eapply offset_cycle).
         repeat erewrite
                (renumber_bindings_ext _ _ _
-                                      ltac:(eapply offset_cycle_renumbering)).
+                                      ltac:(eapply offset_cycle)).
         cbn [plus].
         replace (from - to + to) with from by omega.
         replace (from - to + S to) with (S from) by omega.
@@ -1755,13 +2467,87 @@ Module Rewriter.
         rewrite length_renumber.
         repeat erewrite
                (renumber_op_ext _ _ _
-                                ltac:(eapply offset_cycle_renumbering)).
+                                ltac:(eapply offset_cycle)).
         cbn [plus].
         replace (from - to + S (to + length ptail))
                 with (from + S (length ptail)) by omega.
         replace (to + S (length ptail))
                 with (S (to + length ptail)) by omega.
         crush_Mequiv.
+    Qed.
+
+    Definition replace_lemma
+               (lbinds fwd_rbinds : list operation)
+               (lhead rhead : operation)
+               (pbinds : list operation) (phead : operation)
+               (ptail : list operation) (prog_end : operation)
+      : list operation * operation * list operation * operation + error :=
+      let len_lbinds := length lbinds in
+      let len_rbinds := length fwd_rbinds in
+      _ <-! if expr_omits_rangeb len_lbinds (ptail, prog_end)
+            then ok tt
+            else raise (E_msg "replace_lemma: lbinds not omitted in tail");
+        match Decompose.prefix op_eqb (lhead :: lbinds) (phead :: pbinds) with
+        | Some rest =>
+          let f := shift len_lbinds len_rbinds in
+          ok (rev_append fwd_rbinds rest,
+              rhead,
+              renumber_bindings (offset_renumbering 1 f) ptail,
+              renumber_op (offset_renumbering (S (length ptail)) f)
+                          prog_end)
+        | None =>
+          raise (E_msg "replace_lemma: match failed")
+        end.
+
+    Lemma replace_lemma_correct lbinds fwd_rbinds lhead rhead
+      pbinds phead ptail prog_end :
+      op_type lhead = op_type rhead ->
+      equiv (rev lbinds, lhead) (fwd_rbinds, rhead) ->
+      match replace_lemma lbinds fwd_rbinds lhead rhead
+                          pbinds phead ptail prog_end with
+      | ok (new_pbinds, new_phead, new_ptail, new_prog_end) =>
+        equiv (assemble pbinds phead ptail prog_end)
+              (assemble new_pbinds new_phead new_ptail new_prog_end)
+      | raise _ => True
+      end.
+    Proof.
+      intros L ?.
+      remember (replace_lemma lbinds fwd_rbinds lhead rhead
+                              pbinds phead ptail prog_end) as err;
+        destruct err as
+          [[[[new_pbinds' new_phead'] new_ptail'] new_prog_end']|];
+        eauto.
+      cbv [replace_lemma] in *.
+      pose proof (Decompose.prefix_correct op_eqb op_eqb_eq
+                                           (lhead :: lbinds)
+                                           (phead :: pbinds));
+        destruct (Decompose.prefix op_eqb
+                                   (lhead :: lbinds)
+                                   (phead :: pbinds)) as [rest|];
+        repeat step_err_bind.
+      listrew.
+      match goal with
+      | H : _ :: _ = _ :: _ |- _ => inversion H; clear H
+      end.
+      subst new_pbinds' new_phead' new_ptail' new_prog_end' pbinds phead.
+      cbv [assemble]; listrew.
+
+      eapply equiv_prefix.
+      remember (rev lbinds) as fwd_lbinds.
+      eapply (f_equal (@rev _)) in Heqfwd_lbinds; listrew.
+      subst lbinds; listrew.
+      eapply equiv_suffix; eauto.
+      - pose proof (expr_omits_rangeb_correct (length fwd_lbinds)
+                                              (ptail, prog_end));
+          destruct (expr_omits_rangeb (length fwd_lbinds) (ptail, prog_end));
+          eauto; congruence.
+      - rewrite renumber_expr_renumber_bindings.
+        f_equal.
+        eapply renumber_op_ext.
+        intros.
+        rewrite <-offset_renumbering_plus.
+        f_equal.
+        omega.
     Qed.
   End WithMap.
 End Rewriter.
@@ -1853,6 +2639,37 @@ Section ExampleCoins.
   Definition example_coin_lemma_rhs :=
     ((op_unit :: nil), op_app coin (ref_index 0)).
 
+  Lemma Mbind_unused {t1 t2} (a : M t1) (b : M t2) :
+    Mequiv (Mbind a (fun _ => b)) b.
+  Proof. eapply Bind_unused. Qed.
+
+  Lemma interp_expr_cast_different ctxt ctx e t :
+    t <> expr_type e ->
+    Mequiv (interp_expr_cast ctxt ctx e t)
+           (Mret type_inhabited).
+  Proof.
+    intros; cbv [interp_expr_cast].
+    setoid_rewrite <-(Mbind_unused (interp_expr ctxt ctx e)
+                                   (Mret type_inhabited)).
+    eapply Mequiv_Mbind; [reflexivity|intros].
+    rewrite cast_different by eauto; reflexivity.
+  Qed.
+
+  Lemma equiv_under_same_type ctxt ctx e1 e2 :
+    expr_type e1 = expr_type e2 ->
+    Mequiv (interp_expr ctxt ctx e1)
+           (interp_expr_cast ctxt ctx e2 _) ->
+    equiv_under ctxt ctx e1 e2.
+  Proof.
+    setoid_rewrite <-interp_expr_cast_expr_type.
+    cbv [equiv_under].
+    intros.
+    destruct (type_dec t (expr_type e1)).
+    - subst; eauto.
+    - setoid_rewrite interp_expr_cast_different; try congruence.
+      reflexivity.
+  Qed.
+
   Lemma example_coin_lemma :
     equiv example_coin_lemma_lhs example_coin_lemma_rhs.
   Proof.
@@ -1883,7 +2700,6 @@ Section ExampleCoins.
      op_retapp
        (id ((tbool * tbool) * tbool))
        (ref_pair (ref_pair (ref_index 0) (ref_index 3)) (ref_index 3))).
-
   Derive coins_endpoint
          SuchThat (equiv coins_example coins_endpoint)
          As coins_example_rewrite.
@@ -1891,20 +2707,55 @@ Section ExampleCoins.
     set (lbinds := rev (fst example_coin_lemma_lhs)).
     set (lhead := snd example_coin_lemma_lhs).
     pose proof (Rewriter.commute_matches_correct
-                  map lbinds lhead coins_example) as H.
-    set (C := Rewriter.commute_matches map lbinds lhead coins_example) in H;
-      cbv in C;
-      subst C.
-    eapply Forall_inv in H.
-    etransitivity; [eapply H|].
-  Abort.
+                  map lbinds lhead coins_example) as HC.
+    set (C := Rewriter.commute_matches map lbinds lhead coins_example) in HC;
+      cbv in C.
+    cbv [C Rewriter.assemble] in HC.
+    eapply Forall_inv in HC.
+    cbv [rev_append] in HC.
+    setoid_rewrite HC; clear HC.
 
+    set (fwd_rbinds := fst example_coin_lemma_rhs).
+    set (rhead := snd example_coin_lemma_rhs).
+
+    set (HR := Rewriter.replace_lemma_correct
+                 lbinds fwd_rbinds lhead rhead
+                 (op_app coin (ref_index 1)
+                         :: op_app coin (ref_index 1)
+                         :: op_unit :: op_unit
+                         :: op_app coin (ref_index 0) :: op_unit :: nil)
+                 (op_retapp xor' (ref_pair (ref_index 0) (ref_index 1)))
+                 nil
+                 (op_retapp (id (tbool * tbool * tbool))
+                            (ref_pair (ref_pair (ref_index 0)
+                                                (ref_index 5))
+                                      (ref_index 5)))
+                 eq_refl
+                 example_coin_lemma).
+    set (R := Rewriter.replace_lemma
+                lbinds fwd_rbinds lhead rhead
+                (op_app coin (ref_index 1)
+                        :: op_app coin (ref_index 1)
+                        :: op_unit :: op_unit
+                        :: op_app coin (ref_index 0) :: op_unit :: nil)
+                (op_retapp xor' (ref_pair (ref_index 0) (ref_index 1)))
+                nil
+                (op_retapp (id (tbool * tbool * tbool))
+                           (ref_pair (ref_pair (ref_index 0)
+                                               (ref_index 5))
+                                     (ref_index 5)))) in HR;
+      cbv in R;
+      cbv [R Rewriter.assemble rev_append] in HR.
+    setoid_rewrite HR; clear HR.
+    subst coins_endpoint; reflexivity.
+  Qed.
+  Print coins_endpoint.
 
   (*
-  Eval cbv [M interp_expr coins_example interp_bindings Mbind Mret interp_op_silent interp_op lookup_ref lookup transport type_dec type_rec type_rect op_type cdom eq_rect_r eq_rect eq_sym rcdom ccod rccod interp_retconst] in
+  Eval cbv [interp_expr coins_example interp_bindings Mbind Mret interp_op_silent interp_op lookup_ref lookup transport type_dec type_rec type_rect op_type cdom eq_rect_r eq_rect eq_sym rcdom ccod rccod interp_retconst] in
       interp_expr tunit tt coins_example.
    *)
-  
+
   Definition coins_example' :=
     x <-$ ret tt;
     x0 <-$ interp_const coin x;

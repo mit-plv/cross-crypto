@@ -2547,8 +2547,8 @@ Section Language.
   End AuthRewriting.
 
   Section SymmetricEncrypt.
-    Context {tmessage : type}
-            {eq_len : (tmessage * tmessage -> tbool)%etype}
+    Context {tmessage tnat : type}
+            {len : (tmessage -> tnat)%etype}
             {tkey tnonce : type}
             {keygen : (trand -> tkey)%etype}
             {encrypt : (tkey * tnonce * tmessage -> tmessage)%etype}.
@@ -2562,8 +2562,10 @@ Section Language.
     | esrand_neq (i:positive) : i <> sk -> encrypt_safe sk ($i)
     (* boring recursion: *)
     | esconst t v : @encrypt_safe sk t #v
-    | esfunc {t1 t2} (f : func t1 t2) e : encrypt_safe sk e -> encrypt_safe sk (f@e)
-    | esadv  {t1 t2} (e : expr t1) : encrypt_safe sk e -> encrypt_safe sk (!t2@e)
+    | esfunc {t1 t2} (f : func t1 t2) e :
+        encrypt_safe sk e -> encrypt_safe sk (f@e)
+    | esadv  {t1 t2} (e : expr t1) :
+        encrypt_safe sk e -> encrypt_safe sk (!t2@e)
     | espair {t1 t2} (e1: expr t1) (e2: expr t2) :
         encrypt_safe sk e1 ->
         encrypt_safe sk e2 ->
@@ -2572,11 +2574,14 @@ Section Language.
     (* This proposition says that message m is encrypted using
        secret key sk under nonce n somewhere in an expression. *)
     Inductive encrypts (sk : positive)
-              (n : expr tnonce) (m : expr tmessage) : forall {t}, expr t -> Prop :=
+              (n : expr tnonce) (m : expr tmessage) :
+      forall {t}, expr t -> Prop :=
     | encs_encrypt : encrypts sk n m (encrypt@(keygen@$sk, n, m))
     (* boring recursion: *)
-    | encs_func {t1 t2} (f : func t1 t2) e : encrypts sk n m e -> encrypts sk n m (f@e)
-    | encs_adv  {t1 t2} (e : expr t1) : encrypts sk n m e -> encrypts sk n m (!t2@e)
+    | encs_func {t1 t2} (f : func t1 t2) e :
+        encrypts sk n m e -> encrypts sk n m (f@e)
+    | encs_adv  {t1 t2} (e : expr t1) :
+        encrypts sk n m e -> encrypts sk n m (!t2@e)
     | encs_pair_l {t1 t2} (e1 : expr t1) (e2 : expr t2) :
         encrypts sk n m e1 -> encrypts sk n m (e1, e2)
     | encs_pair_r {t1 t2} (e1 : expr t1) (e2 : expr t2) :
@@ -2587,19 +2592,23 @@ Section Language.
 
        Note that this definition doesn't account for birthday attacks. *)
     Definition no_nonce_reuse (sk : positive) {t} (e : expr t) : Prop :=
-      forall n1 m1 n2 m2, encrypts sk n1 m1 e -> encrypts sk n2 m2 e -> whp (n1 == n2 -> m1 == m2).
+      forall n1 m1 n2 m2, encrypts sk n1 m1 e -> encrypts sk n2 m2 e ->
+                          whp (n1 == n2 -> m1 == m2).
 
     (* Equality except for equal-length inputs to encrypt *)
-    Inductive eq_mod_enc (sk : positive) : forall {t}, expr t -> expr t -> Prop :=
+    Inductive eq_mod_enc (sk : positive) :
+      forall {t}, expr t -> expr t -> Prop :=
     | eqe_refl {t} e : @eq_mod_enc sk t e e
     | eqe_encrypt n m m' :
-        whp (eq_len@(m, m')) ->
+        eqwhp (len@m) (len@m') ->
         eq_mod_enc sk
                    (encrypt@(keygen@$sk, n, m ))
                    (encrypt@(keygen@$sk, n, m'))
     (* boring recursion: *)
-    | eqe_func {t1 t2} (f : func t1 t2) e e' : eq_mod_enc sk e e' -> eq_mod_enc sk (f@e) (f@e')
-    | eqe_adv {t1 t2} (e e' : expr t1) : eq_mod_enc sk e e' -> eq_mod_enc sk (!t2@e) (!t2@e')
+    | eqe_func {t1 t2} (f : func t1 t2) e e' :
+        eq_mod_enc sk e e' -> eq_mod_enc sk (f@e) (f@e')
+    | eqe_adv {t1 t2} (e e' : expr t1) :
+        eq_mod_enc sk e e' -> eq_mod_enc sk (!t2@e) (!t2@e')
     | eqe_pair {t1 t2} (e1 e1' : expr t1) (e2 e2' : expr t2) :
         eq_mod_enc sk e1 e1' ->
         eq_mod_enc sk e2 e2' ->
@@ -2845,7 +2854,7 @@ Section Language.
 
     Lemma fill_eq_mod_enc sk nonce msg1 msg2 {t}
           (eh : expr_with_hole tmessage t) :
-      whp (eq_len@(msg1, msg2)) ->
+      eqwhp (len@msg1) (len@msg2) ->
       eq_mod_enc sk
                  (fill_hole eh (encrypt@(keygen@$sk, nonce, msg1)))
                  (fill_hole eh (encrypt@(keygen@$sk, nonce, msg2))).
@@ -2870,7 +2879,7 @@ Section Language.
       e1 = fill_hole eh (encrypt@(keygen@$sk, nonce, msg1)) ->
       ewn_safe sk e1 ->
       let e2 := fill_hole eh (encrypt@(keygen@$sk, nonce, msg2)) in
-      whp (eq_len@(msg1, msg2)) ->
+      eqwhp (len@msg1) (len@msg2) ->
       ewn_safe sk e2 ->
       e1 ≈ e2.
     Proof.
@@ -3034,8 +3043,8 @@ Section Language.
            end.
 
   Section ExampleProtocol1.
-    Context {tmessage tsignature tskey tpkey : type}
-            {eq_len : (tmessage * tmessage -> tbool)%etype}.
+    Context {tmessage tnat tsignature tskey tpkey : type}
+            {len : (tmessage -> tnat)%etype}.
 
     Context {skeygen : (trand -> tskey)%etype} (* secret key generation  *)
             {pkeygen : (tskey -> tpkey)%etype} (* public part of key *)
@@ -3060,7 +3069,7 @@ Section Language.
             (decrypt_encrypt : forall k n m,
                 eqwhp (decrypt@(ekeygen@($k), n, encrypt@(ekeygen@($k), n, m))) m)
             {confidentiality :
-               @confidentiality_conclusion tmessage eq_len
+               @confidentiality_conclusion tmessage tnat len
                                            tkey tnonce
                                            ekeygen encrypt}.
 
@@ -3070,7 +3079,8 @@ Section Language.
             (message2skey_skey2message : forall k,
                 eqwhp (message2skey@(skey2message@k)) k)
             (eq_len_skey2message_skeygen : forall i j,
-               whp (eq_len@(skey2message@(skeygen@($i)), skey2message@(skeygen@($j))))).
+                eqwhp (len@(skey2message@(skeygen@($i))))
+                      (len@(skey2message@(skeygen@($j))))).
 
     (* hardcoded nonce *)
     Context {N : forall eta, interp_type tnonce eta}.
@@ -3131,8 +3141,8 @@ Section Language.
   End ExampleProtocol1.
 
   Section ExampleConfidentiality.
-    Context {tmessage : type}
-            {eq_len : (tmessage * tmessage -> tbool)%etype}.
+    Context {tmessage tnat : type}
+            {len : (tmessage -> tnat)%etype}.
 
     Context {tkey tnonce : type}
             {ekeygen : (trand -> tkey)%etype}
@@ -3144,14 +3154,15 @@ Section Language.
             (decrypt_encrypt : forall k n m,
                 eqwhp (decrypt@(ekeygen@($k), n, encrypt@(ekeygen@($k), n, m))) m)
             {confidentiality :
-               @confidentiality_conclusion tmessage eq_len
+               @confidentiality_conclusion tmessage tnat len
                                            tkey tnonce
                                            ekeygen encrypt}
             {erase_message : (tmessage -> tmessage)%etype}
-            {erase_message_len : forall m, whp (eq_len@(m, erase_message@m))}.
+            {erase_message_len :
+               forall m, eqwhp (len@m) (len@(erase_message@m))}.
 
     Local Notation es_with_nonces := (fun k => @es_with_nonces tmessage tkey tnonce ekeygen encrypt k _).
-    Local Notation eq_mod_enc := (fun k => @eq_mod_enc tmessage eq_len tkey tnonce ekeygen encrypt k _).
+    Local Notation eq_mod_enc := (fun k => @eq_mod_enc tmessage tnat len tkey tnonce ekeygen encrypt k _).
 
     Definition input : type := tmessage.
     Definition output : type := tmessage.

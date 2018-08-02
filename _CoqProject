@@ -4,6 +4,7 @@ src/ListUtil.v
 src/Loops.v
 src/MapUtil.v
 src/Minimalistic.v
+src/NatUtil.v
 src/RatUtil.v
 src/RewriteUtil.v
 src/Util.v

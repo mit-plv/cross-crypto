@@ -2907,7 +2907,7 @@ Module LanguageImpl.
               basetype_transport];
         cbn [interp_const interp_retconst interp_type
                           interp_basetype basetype_transport].
-
+      (* anomalies if the wrong things are unfolded (see coq/coq#8204) *)
       repeat (setoid_rewrite RewriteUtil.Bind_Ret_l ||
               setoid_rewrite <-RewriteUtil.Bind_assoc).
       cbv [Comp_eq image_relation pointwise_relation evalDist getSupport
@@ -2945,8 +2945,15 @@ Module LanguageImpl.
       set (lhead := snd example_coin_lemma_lhs).
       pose proof (commute_matches_correct
                     map lbinds lhead coins_example) as HC.
-      (* Using records makes this reduction much slower. *)
-      set (C := commute_matches _ _ _ _) in HC; cbn in C.
+      set (C := commute_matches _ _ _ _) in HC.
+      (* since introduction of records this computation is quite slow
+         with every strategy except cbn. *)
+      (* Time lazy in C. (* 32.827 secs *) *)
+      (* Time cbv in C. (* 18.912 secs *) *)
+      (* Time vm_compute in C. (* 2.201 secs *) *)
+      (* Time native_compute in C. (* 2.428 secs *) *)
+      (* Time cbn in C. (* 0.176 secs *) *)
+      cbn in C.
       cbv [C assemble] in HC.
       eapply Forall_inv in HC.
       cbv [rev_append] in HC.
@@ -2970,6 +2977,7 @@ Module LanguageImpl.
                                          (ref_index 5)))
                     eq_refl
                     example_coin_lemma) as HR.
+      (* Again reduction is slow if not using cbn *)
       set (R := replace_lemma _ _ _ _ _ _ _ _) in HR; cbn in R.
       cbv [R assemble rev_append] in HR.
       setoid_rewrite HR; clear HR.

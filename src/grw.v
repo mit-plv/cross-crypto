@@ -14,6 +14,9 @@ Require Import CrossCrypto.NatUtil.
 
 Require Import FCF.EqDec.
 
+Set Primitive Projections.
+Unset Printing Primitive Projection Parameters.
+
 Notation "x ?= y" := (eqb x y) (at level 70,
                                 right associativity,
                                 y at next level).

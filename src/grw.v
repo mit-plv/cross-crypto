@@ -1,16 +1,22 @@
+Require Import Coq.Arith.PeanoNat.
+Require Import Coq.Bool.Bool.
 Require Import Coq.Classes.Morphisms.
 Require Import Coq.Logic.Eqdep_dec.
-Require Import Coq.derive.Derive.
 Require Import Coq.Strings.String.
+Require Import Coq.derive.Derive.
+Require Import Omega.
 
-Require Import FCF.FCF FCF.EqDec.
-Close Scope rat_scope.
-Close Scope vector_scope.
+Require Import Coq.Lists.List.
 
-Require Import CrossCrypto.RewriteUtil.
+Require CrossCrypto.fmap.
 Require Import CrossCrypto.ListUtil.
 Require Import CrossCrypto.NatUtil.
-Require CrossCrypto.fmap.list_of_pairs.
+
+Require Import FCF.EqDec.
+
+Notation "x ?= y" := (eqb x y) (at level 70,
+                                right associativity,
+                                y at next level).
 
 Ltac destruct_decider k comparison lemma a b :=
   let H := fresh in
@@ -64,27 +70,33 @@ Tactic Notation "crush_deciders" tactic3(t) :=
 Section Language.
   Local Existing Instance eq_subrelation | 5.
 
-  Context {basetype : Set}
-          {basetype_eqdec : EqDec basetype}
-          {interp_basetype : basetype -> Set}
-          {interp_basetype_eqdec : forall b, EqDec (interp_basetype b)}
-          {interp_basetype_inhabited : forall {b}, interp_basetype b}
-          {basetype_transport :
-             forall {P : basetype -> Type} {a : basetype} (b : basetype),
-               P a -> option (P b)}
-          {basetype_transport_same :
-             forall {P b} (x : P b),
-               basetype_transport b x = Some x}
-          {basetype_transport_different :
-             forall {P b u} (x : P b),
-               u <> b -> basetype_transport u x = None}.
-  Arguments interp_basetype_inhabited {b}.
-  Arguments basetype_transport {P a}.
-  Arguments basetype_transport_same {P b}.
-  Arguments basetype_transport_different {P b u}.
+  Record Basetype :=
+    {
+      basetype : Set;
+      basetype_eqdec : EqDec basetype;
+      interp_basetype : basetype -> Set;
+      interp_basetype_eqdec : forall t, EqDec (interp_basetype t);
+      interp_basetype_inhabited : forall {t}, interp_basetype t;
+      basetype_transport :
+        forall {P : basetype -> Type} {t : basetype} (u : basetype),
+          P t -> option (P u);
+      basetype_transport_same :
+        forall {P t} (x : P t),
+          basetype_transport t x = Some x;
+      basetype_transport_different :
+        forall {P t u} (x : P t),
+          u <> t -> basetype_transport u x = None;
+    }.
+  Arguments interp_basetype_inhabited _ {t}.
+  Arguments basetype_transport _ {P t}.
+  Arguments basetype_transport_same _ {P t}.
+  Arguments basetype_transport_different _ {P t u}.
+  Context {B : Basetype}.
+  Local Existing Instance basetype_eqdec.
+  Local Existing Instance interp_basetype_eqdec.
 
   Inductive type : Set :=
-  | tbase : basetype -> type
+  | tbase : B.(basetype) -> type
   | tunit : type
   | tprod : type -> type -> type.
 
@@ -111,7 +123,7 @@ Section Language.
 
   Fixpoint interp_type (t : type) : Set :=
     match t with
-    | tbase b => interp_basetype b
+    | tbase b => B.(interp_basetype) b
     | tunit => unit
     | tprod t1 t2 => interp_type t1 * interp_type t2
     end.
@@ -139,74 +151,89 @@ Section Language.
 
   Fixpoint interp_type_inhabited {t : type} : interp_type t :=
     match t with
-    | tbase _ => interp_basetype_inhabited
+    | tbase _ => B.(interp_basetype_inhabited)
     | tunit => tt
     | tprod t1 t2 => (interp_type_inhabited, interp_type_inhabited)
     end.
 
-  Context {M : type -> Type}
-          {Mret : forall {t}, interp_type t -> M t}
-          {Mbind : forall {t1 t2}, M t1 -> (interp_type t1 -> M t2) -> M t2}
-          {Mequiv : forall {t}, M t -> M t -> Prop}
-          {Mequiv_equiv : forall {t}, Equivalence (@Mequiv t)}
-          {Proper_Mbind :
-             forall {t1 t2},
-               Proper
-                 (Mequiv ==> (pointwise_relation _ Mequiv) ==>Mequiv)
-                 (@Mbind t1 t2)}
-          {Mbind_assoc :
-             forall {t1 t2 t3}
-                    (f : M t1)
-                    (g : interp_type t1 -> M t2)
-                    (h : interp_type t2 -> M t3),
-               Mequiv (Mbind (Mbind f g) h)
-                      (Mbind f (fun x => Mbind (g x) h))}
-          {Mbind_Mret_l :
-             forall {t1 t2} x (f : interp_type t1 -> M t2),
-               Mequiv (Mbind (Mret x) f) (f x)}
-          {Mbind_Mret_r :
-             forall {t} (x : M t),
-               Mequiv (Mbind x Mret) x}
-          {Mbind_comm :
-             forall {t1 t2 t3}
-                    (c1 : M t1) (c2 : M t2)
-                    (c3 : interp_type t1 -> interp_type t2 -> M t3),
-               Mequiv (Mbind c1 (fun a => Mbind c2 (fun b => c3 a b)))
-                      (Mbind c2 (fun b => Mbind c1 (fun a => c3 a b)))}.
-  Arguments Mret {t}.
-  Arguments Mbind {t1 t2}.
-  Arguments Mequiv {t}.
-  Arguments Mequiv_equiv {t}.
-  Arguments Proper_Mbind {t1 t2}.
-  Arguments Mbind_assoc {t1 t2 t3}.
-  Arguments Mbind_Mret_l {t1 t2}.
-  Arguments Mbind_Mret_r {t}.
-  Arguments Mbind_comm {t1 t2 t3}.
-
+  Record Monad :=
+    {
+      MM : type -> Type;
+      Ret : forall {t}, interp_type t -> MM t;
+      Bind : forall {t1 t2}, MM t1 -> (interp_type t1 -> MM t2) -> MM t2;
+      MMequiv : forall {t}, MM t -> MM t -> Prop;
+      MMequiv_equiv : forall {t}, Equivalence (@MMequiv t);
+      Proper_Bind :
+        forall {t1 t2},
+          Proper
+            (MMequiv ==> (pointwise_relation _ MMequiv) ==> MMequiv)
+            (@Bind t1 t2);
+      Bind_assoc :
+        forall {t1 t2 t3}
+               (f : MM t1)
+               (g : interp_type t1 -> MM t2)
+               (h : interp_type t2 -> MM t3),
+          MMequiv (Bind (Bind f g) h)
+                  (Bind f (fun x => Bind (g x) h));
+      Bind_Ret_l :
+        forall {t1 t2} x (f : interp_type t1 -> MM t2),
+          MMequiv (Bind (Ret x) f) (f x);
+      Bind_Ret_r :
+        forall {t} (x : MM t),
+          MMequiv (Bind x Ret) x;
+      Bind_comm :
+        forall {t1 t2 t3}
+               (c1 : MM t1) (c2 : MM t2)
+               (c3 : interp_type t1 -> interp_type t2 -> MM t3),
+          MMequiv (Bind c1 (fun a => Bind c2 (fun b => c3 a b)))
+                  (Bind c2 (fun b => Bind c1 (fun a => c3 a b)));
+    }.
+  Arguments Ret _ {t}.
+  Arguments Bind _ {t1 t2}.
+  Arguments MMequiv _ {t}.
+  Arguments MMequiv_equiv _ {t}.
+  Arguments Proper_Bind _ {t1 t2}.
+  Arguments Bind_assoc _ {t1 t2 t3}.
+  Arguments Bind_Ret_l _ {t1 t2}.
+  Arguments Bind_Ret_r _ {t}.
+  Arguments Bind_comm _ {t1 t2 t3}.
+  Context {Mon : Monad}.
+  Local Existing Instance MMequiv_equiv.
+  Local Existing Instance Proper_Bind.
   Local Create HintDb mbind discriminated.
   Hint Rewrite
-       @Mbind_assoc
-       @Mbind_Mret_l
-       @Mbind_Mret_r
+       (@Bind_assoc Mon)
+       (@Bind_Ret_l Mon)
+       (@Bind_Ret_r Mon)
     : mbind.
+  Notation M := (MM Mon).
+  Notation Mret := (Ret Mon).
+  Notation Mbind := (Bind Mon).
+  Notation Mequiv := (MMequiv Mon).
 
   Ltac step_Mequiv :=
     repeat multimatch goal with
            | |- Mequiv (Mbind _ _) (Mbind _ _) =>
-             eapply Proper_Mbind; [try reflexivity | intros ?]
+             eapply Mon.(Proper_Bind); [try reflexivity | intros ?]
            | |- Mequiv ?x ?y => change x with y; reflexivity
            | |- _ => autorewrite with mbind
            end.
 
-  Context {const : Set}
-          {const_eqdec : EqDec const}
-          {cdom ccod : const -> type}
-          {interp_const : forall c, interp_type (cdom c) -> M (ccod c)}
-          {retconst : Set}
-          {retconst_eqdec : EqDec retconst}
-          {rcdom rccod : retconst -> type}
-          {interp_retconst : forall c,
-              interp_type (rcdom c) -> interp_type (rccod c)}.
+  Record Const :=
+    {
+      const : Set;
+      const_eqdec : EqDec const;
+      cdom; ccod : const -> type;
+      interp_const : forall c, interp_type (cdom c) -> M (ccod c);
+      retconst : Set;
+      retconst_eqdec : EqDec retconst;
+      rcdom; rccod : retconst -> type;
+      interp_retconst : forall c,
+          interp_type (rcdom c) -> interp_type (rccod c)
+    }.
+  Local Existing Instance const_eqdec.
+  Local Existing Instance retconst_eqdec.
+  Context {C : Const}.
 
   (* De bruijn indices which can be paired together to get a tuple *)
   Inductive ref : Type :=
@@ -229,8 +256,8 @@ Section Language.
 
   Inductive op : Type :=
   | op_unit : op
-  | op_app (c : const) : ref -> op
-  | op_retapp (c : retconst) : ref -> op.
+  | op_app (c : C.(const)) : ref -> op
+  | op_retapp (c : C.(retconst)) : ref -> op.
 
   Definition op_eqb (o o' : op) : bool :=
     match o, o' with
@@ -246,16 +273,15 @@ Section Language.
   Definition op_type o : type :=
     match o with
     | op_unit => tunit
-    | op_app c _ => ccod c
-    | op_retapp c _ => rccod c
+    | op_app c _ => ccod _ c
+    | op_retapp c _ => rccod _ c
     end.
 
   Fixpoint transport {P : type -> Type} {a : type} (b : type) :
     P a -> option (P b) :=
     match a, b with
     | tbase a, tbase b => @basetype_transport
-                            (fun bt => P (tbase bt))
-                            _ b
+                            _ (fun bt => P (tbase bt)) _ b
     | tunit, tunit => Some
     | tprod a1 a2, tprod b1 b2 =>
       fun p =>
@@ -295,13 +321,13 @@ Section Language.
 
   Definition interp_op ctxt ctx o : option (M (op_type o)) :=
     match o with
-    | op_unit => Some (@Mret tunit tt)
-    | op_app c r => match lookup_ref ctxt ctx r (cdom c) with
-                    | Some x => Some (interp_const c x)
+    | op_unit => Some (Mret (tt : interp_type tunit))
+    | op_app c r => match lookup_ref ctxt ctx r (cdom _ c) with
+                    | Some x => Some (interp_const _ c x)
                     | None => None
                     end
-    | op_retapp c r => match lookup_ref ctxt ctx r (rcdom c) with
-                       | Some x => Some (Mret (interp_retconst c x))
+    | op_retapp c r => match lookup_ref ctxt ctx r (rcdom _ c) with
+                       | Some x => Some (Mret (interp_retconst _ c x))
                        | None => None
                        end
     end.
@@ -315,7 +341,7 @@ Section Language.
   Lemma transport_same {P t} (x : P t) : transport t x = Some x.
   Proof.
     revert P x; induction t; intros P x; cbn [transport].
-    - eapply (@basetype_transport_same (fun b => P (tbase b))).
+    - eapply (@basetype_transport_same _ (fun b => P (tbase b))).
     - eauto.
     - rewrite IHt1, IHt2; eauto.
   Qed.
@@ -328,7 +354,7 @@ Section Language.
     revert P x u; induction t as [| |t1 ? t2 ?]; intros P x [| |u1 u2];
       intros NE; cbn [transport];
       try congruence.
-    - eapply (@basetype_transport_different (fun b => P (tbase b))).
+    - eapply (@basetype_transport_different _ (fun b => P (tbase b))).
       congruence.
     - destruct (type_eq_or t1 u1).
       + destruct (type_eq_or t2 u2).
@@ -389,10 +415,10 @@ Section Language.
     Mequiv (Mbind c1 (c2 _)) (Mbind c1' (c2' _)).
   Proof.
     intros ? Hc1 Hc2; subst t1'.
-    eapply Proper_Mbind; cbv [pointwise_relation]; eauto.
+    step_Mequiv; cbv [pointwise_relation]; eauto.
     specialize (Hc1 t1).
     setoid_rewrite cast_same in Hc1.
-    setoid_rewrite Mbind_Mret_r in Hc1.
+    setoid_rewrite Bind_Ret_r in Hc1.
     eauto.
   Qed.
 
@@ -401,7 +427,7 @@ Section Language.
            (interp_expr ctxt ctx e).
   Proof.
     cbv [interp_expr_cast].
-    setoid_rewrite <-(Mbind_Mret_r (interp_expr ctxt ctx e)) at 2.
+    setoid_rewrite <-(Bind_Ret_r _ (interp_expr ctxt ctx e)) at 2.
     step_Mequiv.
     rewrite cast_same; reflexivity.
   Qed.
@@ -1016,7 +1042,7 @@ Section Language.
                        k' (op_type o1 *
                            (op_type (renumber_op pred o2) * ctxt))%etype
                           (x, (y, ctx))))).
-    { eapply Mbind_comm. }
+    { eapply Bind_comm. }
 
     { step_Mequiv.
       destruct o1; cbn [op_type renumber_op];
@@ -2558,7 +2584,13 @@ Section Language.
   End WithUnused.
 End Language.
 
-Section LanguageImpl.
+Require Import FCF.FCF.
+Close Scope rat_scope.
+Close Scope vector_scope.
+Require Import CrossCrypto.RewriteUtil.
+Require Import CrossCrypto.fmap.list_of_pairs.
+
+Module LanguageImpl.
   Inductive basetype : Set :=
   | tnat : basetype
   | tbool : basetype.
@@ -2611,17 +2643,64 @@ Section LanguageImpl.
     b2 <> b1 -> (@basetype_transport _ b1 b2 p) = None.
   Proof. destruct b1, b2; cbn [basetype_transport]; congruence. Qed.
 
-  Notation type := (@type basetype).
-  Notation interp_type := (@interp_type basetype interp_basetype).
+  Definition B : Basetype :=
+    Build_Basetype (@basetype)
+                   (@basetype_eqdec)
+                   (@interp_basetype)
+                   (@interp_basetype_eqdec)
+                   (@interp_basetype_inhabited)
+                   (@basetype_transport)
+                   (@basetype_transport_same)
+                   (@basetype_transport_different).
 
-  Definition M t := Comp (interp_type t).
-  Definition Mret {t : type} : interp_type t -> M t :=
+  Notation type := (@type B).
+  Notation interp_type := (@interp_type B).
+  Notation tbase := (@tbase B).
+
+
+
+  Definition MM t := Comp (interp_type t).
+  Definition Ret {t : type} : interp_type t -> MM t :=
     Ret (EqDec_dec interp_type_eqdec).
-  Definition Mbind {t1 t2 : type} :
-    M t1 ->
-    (interp_type t1 -> M t2) -> M t2 :=
+  Definition Bind {t1 t2 : type} :
+    MM t1 -> (interp_type t1 -> MM t2) -> MM t2 :=
     @Bind _ _.
-  Definition Mequiv {t} : M t -> M t -> Prop := Comp_eq.
+  Definition MMequiv {t} : MM t -> MM t -> Prop := Comp_eq.
+  Instance MMequiv_equiv {t} : Equivalence (@MMequiv t).
+  Proof. typeclasses eauto. Qed.
+  Instance Proper_Mbind {t1 t2} :
+    Proper
+      (MMequiv ==> (pointwise_relation _ MMequiv) ==> MMequiv)
+      (@Bind t1 t2).
+  Proof. eapply Proper_Bind. Qed.
+  Lemma Bind_assoc {t1 t2 t3} (f : MM t1)
+        (g : interp_type t1 -> MM t2) (h : interp_type t2 -> MM t3) :
+    MMequiv (Bind (Bind f g) h)
+           (Bind f (fun x => Bind (g x) h)).
+  Proof. symmetry; eapply Bind_assoc. Qed.
+  Lemma Mbind_Mret_l {t1 t2} x (f : interp_type t1 -> MM t2) :
+    MMequiv (Bind (Ret x) f) (f x).
+  Proof. eapply Bind_Ret_l. Qed.
+  Lemma Mbind_Mret_r {t} (x : MM t) : MMequiv (Bind x Ret) x.
+  Proof. eapply Bind_Ret_r. Qed.
+  Lemma Mbind_comm (t1 t2 t3 : type) (c1 : MM t1) (c2 : MM t2)
+        (c3 : interp_type t1 -> interp_type t2 -> MM t3) :
+    MMequiv (Bind c1 (fun a => Bind c2 (fun b => c3 a b)))
+            (Bind c2 (fun b => Bind c1 (fun a => c3 a b))).
+  Proof. eapply Bind_comm. Qed.
+
+  Definition Mon : @Monad B :=
+    @Build_Monad B
+                 (@MM)
+                 (@Ret)
+                 (@Bind)
+                 (@MMequiv)
+                 (@MMequiv_equiv)
+                 (@Proper_Mbind)
+                 (@Bind_assoc)
+                 (@Mbind_Mret_l)
+                 (@Mbind_Mret_r)
+                 (@Mbind_comm).
 
   Inductive const : Type :=
   | coin.
@@ -2643,7 +2722,7 @@ Section LanguageImpl.
     | coin => tbase tbool
     end.
 
-  Definition interp_const c : interp_type (cdom c) -> M (ccod c) :=
+  Definition interp_const c : interp_type (cdom c) -> MM (ccod c) :=
     match c with
     | coin => fun _ => x <-$ Rnd 1; ret (Vector.nth x Fin.F1)
     end.
@@ -2690,33 +2769,18 @@ Section LanguageImpl.
     | id _ => fun x => x
     end.
 
-  Lemma Proper_Mbind {t1 t2} :
-    Proper
-      (Mequiv ==> (pointwise_relation _ Mequiv) ==> Mequiv)
-      (@Mbind t1 t2).
-  Proof. eapply Proper_Bind. Qed.
-
-  Lemma Mbind_assoc {t1 t2 t3} (f : M t1)
-        (g : interp_type t1 -> M t2) (h : interp_type t2 -> M t3) :
-    Mequiv (Mbind (Mbind f g) h)
-           (Mbind f (fun x => Mbind (g x) h)).
-  Proof. symmetry; eapply Bind_assoc. Qed.
-
-  Lemma Mbind_comm (t1 t2 t3 : type) (c1 : M t1) (c2 : M t2)
-        (c3 : interp_type t1 -> interp_type t2 -> M t3) :
-    Mequiv (Mbind c1 (fun a => Mbind c2 (fun b => c3 a b)))
-           (Mbind c2 (fun b => Mbind c1 (fun a => c3 a b))).
-  Proof. eapply Bind_comm. Qed.
-
-  Lemma Mbind_Mret_l {t1 t2} x (f : interp_type t1 -> M t2) :
-    Mequiv (Mbind (Mret x) f) (f x).
-  Proof. eapply Bind_Ret_l. Qed.
-
-  Lemma Mbind_Mret_r {t} (x : M t) : Mequiv (Mbind x Mret) x.
-  Proof. eapply Bind_Ret_r. Qed.
-
-  Instance Mequiv_equiv {t} : Equivalence (@Mequiv t).
-  Proof. typeclasses eauto. Qed.
+  Definition C : @Const B Mon :=
+    @Build_Const B Mon
+                 (@const)
+                 (@const_eqdec)
+                 (@cdom)
+                 (@ccod)
+                 (@interp_const)
+                 (@retconst)
+                 (@retconst_eqdec)
+                 (@rcdom)
+                 (@rccod)
+                 (@interp_retconst).
 
   (** Reification *)
   Ltac reify_type t :=
@@ -2773,7 +2837,7 @@ Section LanguageImpl.
     | (x <-$ ?o; ?f) =>
       let T := lazymatch type of o with
                | Comp ?T => T
-               | M ?T => constr:(interp_type T)
+               | MM ?T => constr:(interp_type T)
                | ?X => fail "XX" X
                end in
       let o := reify_op ctx o in
@@ -2799,10 +2863,11 @@ Section LanguageImpl.
         constr:(e).
 
   Section ExampleCoins.
-    Import CrossCrypto.fmap.list_of_pairs.
     Local Notation map := (list_of_pairs Nat.eqb).
 
-    Notation expr := (@expr const retconst).
+    Notation expr := (@expr B Mon C).
+    Notation op_app := (@op_app B Mon C).
+    Notation op_retapp := (@op_retapp B Mon C).
 
     Definition example_coin_lemma_lhs : expr :=
       (op_unit
@@ -2815,26 +2880,14 @@ Section LanguageImpl.
     Definition example_coin_lemma_rhs : expr :=
       ((op_unit :: nil), op_app coin (ref_index 0)).
 
-    Lemma Mbind_unused {t1 t2} (a : M t1) (b : M t2) :
-      Mequiv (Mbind a (fun _ => b)) b.
+    Lemma Bind_unused {t1 t2} (a : MM t1) (b : MM t2) :
+      MMequiv (Bind a (fun _ => b)) b.
     Proof. eapply Bind_unused. Qed.
 
-    Notation equiv :=
-      (@equiv basetype interp_basetype (@interp_basetype_inhabited)
-              (@basetype_transport)
-              M (@Mret) (@Mbind) (@Mequiv)
-              const cdom ccod interp_const retconst
-              rcdom rccod interp_retconst).
+    Notation equiv := (@equiv B Mon C).
 
     Notation equiv_under_same_type :=
-      (@equiv_under_same_type
-         basetype basetype_eqdec interp_basetype (@interp_basetype_inhabited)
-         (@basetype_transport) (@basetype_transport_same)
-         (@basetype_transport_different) M (@Mret) (@Mbind) (@Mequiv)
-         (@Mequiv_equiv) (@Proper_Mbind) (@Mbind_Mret_r)
-         const cdom ccod interp_const
-         retconst rcdom rccod interp_retconst
-         (@Mbind_unused)).
+      (@equiv_under_same_type B Mon C (@Bind_unused)).
 
     Lemma example_coin_lemma :
       equiv example_coin_lemma_lhs example_coin_lemma_rhs.
@@ -2843,11 +2896,17 @@ Section LanguageImpl.
       eapply equiv_under_same_type; eauto.
       cbv -[Comp_eq
               interp_const interp_retconst
-              interp_type_eqdec interp_basetype_eqdec];
-        cbn [interp_const interp_retconst].
+              interp_type_eqdec
+              basetype_eqdec
+              interp_basetype
+              interp_basetype_inhabited
+              interp_basetype_eqdec
+              basetype_transport];
+        cbn [interp_const interp_retconst interp_type
+                          interp_basetype basetype_transport].
 
-      (* anomalies if we accidentally unfold interp_basetype_eqdec *)
-      repeat (setoid_rewrite Bind_Ret_l || setoid_rewrite <-Bind_assoc).
+      repeat (setoid_rewrite RewriteUtil.Bind_Ret_l ||
+              setoid_rewrite <-RewriteUtil.Bind_assoc).
       cbv [Comp_eq image_relation pointwise_relation evalDist getSupport
                    getAllBvectors].
       cbn [List.map app sumList fold_left
@@ -2863,25 +2922,6 @@ Section LanguageImpl.
              end;
         try congruence; reflexivity.
     Qed.
-
-    Notation commute_matches_correct :=
-      (@commute_matches_correct
-         basetype interp_basetype (@interp_basetype_inhabited)
-         (@basetype_transport)
-         M (@Mret) (@Mbind) (@Mequiv) (@Mequiv_equiv)
-         (@Proper_Mbind) (@Mbind_assoc) (@Mbind_comm)
-         const const_eqdec cdom ccod interp_const
-         retconst retconst_eqdec rcdom rccod interp_retconst
-         map).
-
-    Notation replace_lemma_correct :=
-      (@replace_lemma_correct
-         basetype interp_basetype (@interp_basetype_inhabited)
-         (@basetype_transport) (@basetype_transport_same)
-         M (@Mret) (@Mbind) (@Mequiv) (@Mequiv_equiv)
-         (@Proper_Mbind) (@Mbind_assoc) (@Mbind_Mret_r)
-         const const_eqdec cdom ccod interp_const
-         retconst retconst_eqdec rcdom rccod interp_retconst).
 
     Existing Instance equiv_equiv.
 
@@ -2900,8 +2940,10 @@ Section LanguageImpl.
     Proof.
       set (lbinds := rev (fst example_coin_lemma_lhs)).
       set (lhead := snd example_coin_lemma_lhs).
-      pose proof (commute_matches_correct lbinds lhead coins_example) as HC.
-      set (C := commute_matches _ _ _ _) in HC; cbv in C.
+      pose proof (commute_matches_correct
+                    map lbinds lhead coins_example) as HC.
+      (* Using records makes this reduction much slower. *)
+      set (C := commute_matches _ _ _ _) in HC; cbn in C.
       cbv [C assemble] in HC.
       eapply Forall_inv in HC.
       cbv [rev_append] in HC.
@@ -2925,17 +2967,11 @@ Section LanguageImpl.
                                          (ref_index 5)))
                     eq_refl
                     example_coin_lemma) as HR.
-      set (R := replace_lemma _ _ _ _ _ _ _ _) in HR; cbv in R.
+      set (R := replace_lemma _ _ _ _ _ _ _ _) in HR; cbn in R.
       cbv [R assemble rev_append] in HR.
       setoid_rewrite HR; clear HR.
       subst coins_endpoint; reflexivity.
     Qed.
-    Print coins_endpoint.
-
-    (*
-  Eval cbv [interp_expr coins_example interp_bindings Mbind Mret interp_op_silent interp_op lookup_ref lookup transport type_eq_or type_rec type_rect op_type cdom eq_rect_r eq_rect eq_sym rcdom ccod rccod interp_retconst] in
-      interp_expr tunit tt coins_example.
-     *)
 
     (* reification not yet ported because of modularity issues *)
 

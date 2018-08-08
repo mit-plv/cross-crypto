@@ -1526,6 +1526,13 @@ Section Language.
 
   Ltac unpack_whp := merge_whp; apply always_whp; unpack_always.
 
+  Ltac unpack_whp_push :=
+    unpack_whp;
+    match goal with
+    | |- ?x = true => change (is_true x)
+    end;
+    autorewrite with push_is_true.
+
   Section WHPCorollaries.
     Lemma whp_contract a b : whp b -> whp (a -> b).
     Proof. unpack_whp; btauto. Qed.
@@ -1665,6 +1672,9 @@ Section Language.
   Lemma feqb_refl {t} (x : expr t) : eqwhp (x == x) #vtrue.
   Proof. unpack_whp; rewrite eqb_refl; btauto. Qed.
 
+  Lemma feqb_symm {t} (a b : expr t) : eqwhp (a == b) (b == a).
+  Proof. unpack_whp_push; rewrite eqb_symm; btauto. Qed.
+
   Ltac echange t :=
     refine (_ : t).
 
@@ -1769,7 +1779,7 @@ Section Language.
         repeat setoid_rewrite <-Bind_assoc.
         repeat setoid_rewrite Bind_Ret_l.
 
-        (* FIXME: this might be false ~ andreser *)
+        (* FIXME: this assertion is false - andreser, ikdc *)
         assert (bind_twice : forall {A B:Set} (x: Comp B) (f : B -> B -> Comp A),
                    Comp_eq (Bind x (fun y => Bind x (f y)))
                            (Bind x (fun y => f y y))) by admit.
@@ -1972,11 +1982,7 @@ Section Language.
           (E : expr_with_hole hole t) :
       whp (e1 == e2 -> fill_hole E e1 == fill_hole E e2).
     Proof.
-      unpack_whp.
-      match goal with
-      | |- ?x = true => change (is_true x)
-      end.
-      autorewrite with push_is_true.
+      unpack_whp_push.
       intros.
       induction E; cbn [fill_hole interp_fixed]; congruence.
     Qed.
@@ -2130,21 +2136,31 @@ Section Language.
               apply whp_explosion]|]
     end.
 
-    Lemma fill_cond_if_true a {t} (e e' : expr t) (C : expr_with_hole _ tbool) :
-      eqwhp (a -> fill_hole C (eif a then e else e')) (a -> fill_hole C e).
-    Proof.
-      rewrite_fill_cond_true.
-      rewrite if_true.
-      reflexivity.
-    Qed.
+  Ltac external_change e e' :=
+    let H := fresh in
+    assert (whp (e == e')) as H;
+    [|
+     revert H;
+     apply whp_impl;
+     internal_rewrite;
+     apply whp_contract
+    ].
 
-    Lemma fill_cond_if_false a {t} (e e' : expr t) (C : expr_with_hole _ tbool) :
-      eqwhp (~a -> fill_hole C (eif a then e else e')) (~a -> fill_hole C e').
-    Proof.
-      rewrite_fill_cond_false.
-      rewrite if_false.
-      reflexivity.
-    Qed.
+  Lemma fill_cond_if_true a {t} (e e' : expr t) (C : expr_with_hole _ tbool) :
+    eqwhp (a -> fill_hole C (eif a then e else e')) (a -> fill_hole C e).
+  Proof.
+    rewrite_fill_cond_true.
+    rewrite if_true.
+    reflexivity.
+  Qed.
+
+  Lemma fill_cond_if_false a {t} (e e' : expr t) (C : expr_with_hole _ tbool) :
+    eqwhp (~a -> fill_hole C (eif a then e else e')) (~a -> fill_hole C e').
+  Proof.
+    rewrite_fill_cond_false.
+    rewrite if_false.
+    reflexivity.
+  Qed.
 
   Ltac rewrite_fill_cond_if_true :=
     match goal with
@@ -2546,85 +2562,7 @@ Section Language.
     Qed.
   End AuthRewriting.
 
-  Section SymmetricEncrypt.
-    Context {tmessage tnat : type}
-            {len : (tmessage -> tnat)%etype}
-            {tkey tnonce : type}
-            {keygen : (trand -> tkey)%etype}
-            {encrypt : (tkey * tnonce * tmessage -> tmessage)%etype}.
-
-    (* The secret key is used only as the input to encrypt *)
-    Inductive encrypt_safe (sk : positive) : forall {t}, expr t -> Prop :=
-    | esencrypt n m :
-        encrypt_safe sk n ->
-        encrypt_safe sk m -> (* No key cycles *)
-        encrypt_safe sk (encrypt@(keygen@$sk, n, m))
-    | esrand_neq (i:positive) : i <> sk -> encrypt_safe sk ($i)
-    (* boring recursion: *)
-    | esconst t v : @encrypt_safe sk t #v
-    | esfunc {t1 t2} (f : func t1 t2) e :
-        encrypt_safe sk e -> encrypt_safe sk (f@e)
-    | esadv  {t1 t2} (e : expr t1) :
-        encrypt_safe sk e -> encrypt_safe sk (!t2@e)
-    | espair {t1 t2} (e1: expr t1) (e2: expr t2) :
-        encrypt_safe sk e1 ->
-        encrypt_safe sk e2 ->
-        encrypt_safe sk (e1, e2).
-
-    (* This proposition says that message m is encrypted using
-       secret key sk under nonce n somewhere in an expression. *)
-    Inductive encrypts (sk : positive)
-              (n : expr tnonce) (m : expr tmessage) :
-      forall {t}, expr t -> Prop :=
-    | encs_encrypt : encrypts sk n m (encrypt@(keygen@$sk, n, m))
-    (* boring recursion: *)
-    | encs_func {t1 t2} (f : func t1 t2) e :
-        encrypts sk n m e -> encrypts sk n m (f@e)
-    | encs_adv  {t1 t2} (e : expr t1) :
-        encrypts sk n m e -> encrypts sk n m (!t2@e)
-    | encs_pair_l {t1 t2} (e1 : expr t1) (e2 : expr t2) :
-        encrypts sk n m e1 -> encrypts sk n m (e1, e2)
-    | encs_pair_r {t1 t2} (e1 : expr t1) (e2 : expr t2) :
-        encrypts sk n m e2 -> encrypts sk n m (e1, e2).
-
-    (* Whenever nonces are equal, the corresponding messages are also
-       equal.
-
-       Note that this definition doesn't account for birthday attacks. *)
-    Definition no_nonce_reuse (sk : positive) {t} (e : expr t) : Prop :=
-      forall n1 m1 n2 m2, encrypts sk n1 m1 e -> encrypts sk n2 m2 e ->
-                          whp (n1 == n2 -> m1 == m2).
-
-    (* Equality except for equal-length inputs to encrypt *)
-    Inductive eq_mod_enc (sk : positive) :
-      forall {t}, expr t -> expr t -> Prop :=
-    | eqe_refl {t} e : @eq_mod_enc sk t e e
-    | eqe_encrypt n m m' :
-        eqwhp (len@m) (len@m') ->
-        eq_mod_enc sk
-                   (encrypt@(keygen@$sk, n, m ))
-                   (encrypt@(keygen@$sk, n, m'))
-    (* boring recursion: *)
-    | eqe_func {t1 t2} (f : func t1 t2) e e' :
-        eq_mod_enc sk e e' -> eq_mod_enc sk (f@e) (f@e')
-    | eqe_adv {t1 t2} (e e' : expr t1) :
-        eq_mod_enc sk e e' -> eq_mod_enc sk (!t2@e) (!t2@e')
-    | eqe_pair {t1 t2} (e1 e1' : expr t1) (e2 e2' : expr t2) :
-        eq_mod_enc sk e1 e1' ->
-        eq_mod_enc sk e2 e2' ->
-        eq_mod_enc sk (e1, e2) (e1', e2').
-
-    (* If the secret key is used correctly, and nonces aren't reused,
-       then we can replace the inputs to encryptions with anything. *)
-    Definition confidentiality_conclusion :=
-      forall (sk : positive) {t} (e1 e2 : expr t),
-        encrypt_safe sk e1 ->
-        encrypt_safe sk e2 ->
-        no_nonce_reuse sk e1 ->
-        no_nonce_reuse sk e2 ->
-        eq_mod_enc sk e1 e2 ->
-        e1 ≈ e2.
-
+  Section WHPFunction.
     Definition whp_compatible {t1 t2} (l1 l2 : list (expr t1 * expr t2))
       : Prop :=
       forall x1 y1 x2 y2, In (x1, y1) l1 -> In (x2, y2) l2 ->
@@ -2632,26 +2570,6 @@ Section Language.
 
     Definition whp_function {t1 t2} (l : list (expr t1 * expr t2)) : Prop :=
       whp_compatible l l.
-
-    Ltac external_change e e' :=
-      let H := fresh in
-      assert (whp (e == e')) as H;
-      [|
-       revert H;
-       apply whp_impl;
-       internal_rewrite;
-       apply whp_contract
-      ].
-
-    Ltac unpack_whp_push :=
-      unpack_whp;
-      match goal with
-      | |- ?x = true => change (is_true x)
-      end;
-      autorewrite with push_is_true.
-
-    Lemma feqb_symm {t} (a b : expr t) : eqwhp (a == b) (b == a).
-    Proof. unpack_whp_push. rewrite eqb_symm. btauto. Qed.
 
     Lemma compatible_app {t1 t2} (l1 l2 : list (expr t1 * expr t2)) :
       whp_function l1 ->
@@ -2683,210 +2601,90 @@ Section Language.
                     end.
            subst; unpack_whp_push; reflexivity.
     Qed.
+  End WHPFunction.
 
-    Inductive es_with_nonces (sk : positive) :
-      forall {t}, expr t -> list (expr tnonce * expr tmessage) -> Prop :=
-    | ewn_encrypt n m l1 l2 :
-        es_with_nonces sk n l1 ->
-        es_with_nonces sk m l2 -> (* No key cycles *)
-        es_with_nonces sk (encrypt@(keygen@$sk, n, m)) ((n, m) :: l1 ++ l2)
-    | ewn_rand_neq (i:positive) : i <> sk -> es_with_nonces sk ($i) nil
-    (* boring recursion: *)
-    | ewn_const t v : @es_with_nonces sk t #v nil
-    | ewn_func {t1 t2} (f : func t1 t2) e l :
-        es_with_nonces sk e l -> es_with_nonces sk (f@e) l
-    | ewn_adv  {t1 t2} (e : expr t1) l :
-        es_with_nonces sk e l -> es_with_nonces sk (!t2@e) l
-    | ewn_pair {t1 t2} (e1: expr t1) (e2: expr t2) l1 l2 :
-        es_with_nonces sk e1 l1 ->
-        es_with_nonces sk e2 l2 ->
-        es_with_nonces sk (e1, e2) (l1 ++ l2).
+  Section SymmetricEncrypt.
+    Context {tmessage tnat : type}
+            {len : (tmessage -> tnat)%etype}
+            {tkey tnonce : type}
+            {keygen : (trand -> tkey)%etype}
+            {encrypt : (tkey * tnonce * tmessage -> tmessage)%etype}.
 
-    Lemma ewn_encrypt_safe sk {t} (e : expr t) l :
-      es_with_nonces sk e l -> encrypt_safe sk e.
-    Proof.
-      induction 1; econstructor; eauto.
-    Qed.
-
-    Ltac use_eq_dec_inj :=
-      repeat match goal with
-             | H : existT _ ?a _ = existT _ ?b _ |- _ =>
-               try (subst a || subst b);
-               eapply (inj_pair2_eq_dec _ (EqDec_dec _)) in H;
-               match type of H with
-               | ?x = ?y => try (subst x || subst y)
-               end
-             end.
-
-    Ltac expr_head e :=
-      lazymatch e with
-      | expr_const _ => idtac
-      | expr_random _ => idtac
-      | expr_adversarial _ => idtac
-      | expr_app _ _ => idtac
-      | expr_pair _ _ => idtac
-      end.
-
-    Inductive expr_lt_1 : forall {t1 t2}, expr t1 -> expr t2 -> Prop :=
-    | lt_adv {t1 t2} (e : expr t1) : expr_lt_1 e (!t2@e)%expr
-    | lt_app {t1 t2} (f : (t1 -> t2)%etype) e : expr_lt_1 e (f@e)%expr
-    | lt_inl {t1 t2} (e1 : expr t1) (e2 : expr t2) : expr_lt_1 e1 (e1, e2)
-    | lt_inr {t1 t2} (e1 : expr t1) (e2 : expr t2) : expr_lt_1 e2 (e1, e2)
+    Inductive encrypt_pair_nonces (sk : positive) :
+      forall {t},
+        expr t -> expr t ->
+        list (expr tnonce * expr (tmessage * tmessage)) -> Prop :=
+    | ep_encrypt n n_safety nl lml m m_safety ml m' m'_safety m'l :
+        encrypt_pair_nonces sk n n_safety nl ->
+        encrypt_pair_nonces sk (len@m) (len@m') lml ->
+        encrypt_pair_nonces sk m m_safety ml ->
+        encrypt_pair_nonces sk m'_safety m' m'l ->
+        encrypt_pair_nonces sk
+                            (encrypt@(keygen@($sk), n, m))
+                            (encrypt@(keygen@($sk), n, m'))
+                            ((n, (m, m')%expr) :: nl ++ lml ++ ml ++ m'l)
+    | ep_const {t} v : @encrypt_pair_nonces sk t (#v) (#v) nil
+    | ep_rand (i : positive) :
+        i <> sk ->
+        encrypt_pair_nonces sk ($i) ($i) nil
+    (* recurse *)
+    | ep_app {t1 t2} (f : func t1 t2) a b l :
+        encrypt_pair_nonces sk a b l ->
+        encrypt_pair_nonces sk (f@a) (f@b) l
+    | ep_adv {t1 t2} (a b : expr t1) l :
+        encrypt_pair_nonces sk a b l ->
+        encrypt_pair_nonces sk (!t2@a) (!t2@b) l
+    | ep_pair {t1 t2} (a1 b1 : expr t1) l1 (a2 b2 : expr t2) l2 :
+        encrypt_pair_nonces sk a1 b1 l1 ->
+        encrypt_pair_nonces sk a2 b2 l2 ->
+        encrypt_pair_nonces sk (a1, a2) (b1, b2) (l1 ++ l2)
+    (* weaken *)
+    | ep_transport {t} (a a' b b' : expr t) l :
+        eqwhp a a' ->
+        eqwhp b b' ->
+        encrypt_pair_nonces sk a b l ->
+        encrypt_pair_nonces sk a' b' l
+    (* TODO allow weakening l to any superset.
+       this allows for a more reasonable definition of
+       encrypt-safety
+       (as used in ep_encrypt; see the conditions on n, m, m' ) *)
     .
 
-    Lemma invert_expr_lt_1 {t1 t2} (e1 : expr t1) (e2 : expr t2) :
-      expr_lt_1 e1 e2 ->
-      match e2 return Prop with
-      | !@e1' => existT _ _ e1 = existT _ _ e1'
-      | f@e1' => existT _ _ e1 = existT _ _ e1'
-      | (a, b) => ((existT _ _ e1 = existT _ _ a) \/
-                   (existT _ _ e1 = existT _ _ b))%type
-      | _ => False
-      end%expr.
+    Definition encrypt_pair sk {t} (a b : expr t) : Prop :=
+      exists l, encrypt_pair_nonces sk a b l /\ whp_function l.
+
+    Global Instance Proper_encrypt_pair_nonces sk {t : type} :
+      Proper (eqwhp ==> eqwhp ==> eq ==> iff)
+             (@encrypt_pair_nonces sk t).
     Proof.
-      intros.
-      inversion H; use_eq_dec_inj; subst; eauto.
+      intros ?? H ?? H' ???; subst.
+      split; (intros Hepn; eapply ep_transport;
+              solve [eassumption | symmetry; eassumption]).
     Qed.
 
-    Definition expr_lt_1_sigT '(existT _ t1 e1 : sigT expr) '(existT _ t2 e2)
-      := expr_lt_1 e1 e2.
-
-    Lemma expr_lt_1_wf : well_founded expr_lt_1_sigT.
-    Proof.
-      intros [? e2].
-      induction e2; econstructor; intros [??] Hlt;
-        eapply invert_expr_lt_1 in Hlt; inversion_sigma; subst;
-          eauto; destruct Hlt; inversion_sigma; subst; eauto.
-    Qed.
-
-    Definition expr_lt_sigT := clos_trans _ expr_lt_1_sigT.
-    Lemma expr_lt_wf : well_founded expr_lt_sigT.
-    Proof. eauto using wf_clos_trans, expr_lt_1_wf. Qed.
-
-    Create HintDb expr_lt discriminated.
-    Hint Resolve lt_adv lt_app : expr_lt.
-
-    Ltac solve_expr_lt_1 :=
-      solve [cbn [expr_lt_1_sigT];
-             multimatch goal with
-             | |- expr_lt_1 _ _ => eauto with expr_lt;
-                                   eapply lt_inl + eapply lt_inr
-             end].
-
-    Ltac solve_expr_lt :=
-      solve [repeat (solve_expr_lt_1 ||
-                     multimatch goal with
-                     | |- expr_lt_sigT _ _ => eapply clos_tn1_trans
-                     | |- clos_trans_n1 _ expr_lt_1_sigT _ _ =>
-                       (eapply tn1_step; solve_expr_lt_1)
-                       ||
-                       (eapply (Relation_Operators.tn1_trans _ _ _ (existT _ _ _));
-                        [solve_expr_lt_1|])
-                     end)].
-
-    Lemma ewn_reuse' sk {t} (e : expr t) l n m :
-      es_with_nonces sk e l -> encrypts sk n m e -> In (n, m) l.
-    Proof.
-      revert t e.
-      cut (forall te : { t : _ & expr t },
-              let (t, e) := te in
-              es_with_nonces sk e l -> encrypts sk n m e -> In (n, m) l).
-      {
-        intros H ????; eapply (H (existT _ _ _)); eauto.
-      }
-      intros te.
-      revert te l n m.
-      refine (well_founded_ind expr_lt_wf _ _).
-      intros [t e] IHe.
-      destruct e; intros l n m Hewn Henc.
-      - inversion Henc.
-      - inversion Henc.
-      - inversion Henc; clear Henc; use_eq_dec_inj; subst.
-        inversion Hewn; clear Hewn; use_eq_dec_inj; subst.
-        eapply (IHe (existT _ _ _)); eauto.
-        solve_expr_lt.
-      - inversion Henc; clear Henc; use_eq_dec_inj; subst.
-        + inversion Hewn; clear Hewn; use_eq_dec_inj; subst.
-          * cbn [In]; eauto.
-          * repeat match goal with
-                   | H : ?x <> ?x |- _ => congruence
-                   | H : es_with_nonces _ _ _ |- _ =>
-                     match type of H with
-                     | context[($sk)%expr] =>
-                       inversion H; clear H; use_eq_dec_inj; subst
-                     end
-                   end.
-        + inversion Hewn; clear Hewn; use_eq_dec_inj; subst.
-          * repeat match goal with
-                   | H : encrypts _ _ _ ?e |- _ =>
-                     expr_head e;
-                       inversion H; clear H; use_eq_dec_inj; subst
-                   end;
-              match goal with
-              | Henc : encrypts _ _ _ ?x |- _ =>
-                match goal with
-                | Hewn : es_with_nonces _ x _ |- _ =>
-                  specialize (IHe (existT _ _ x));
-                    match type of IHe with
-                    | ?a -> _ =>
-                      let H := fresh in assert a as H;
-                                          [|specialize (IHe H _ _ _ Hewn Henc); clear H]
-                    end
-                end
-              end; eauto; try solve_expr_lt.
-            -- cbn [In]; econstructor; solve [eauto using in_or_app].
-            -- cbn [In]; econstructor; solve [eauto using in_or_app].
-          * eapply (IHe (existT _ _ _)); eauto; solve_expr_lt.
-      - inversion Hewn; clear Hewn; use_eq_dec_inj; subst.
-        eapply in_or_app.
-        inversion Henc; [left|right]; clear Henc; use_eq_dec_inj; subst;
-          eapply (IHe (existT _ _ _ )); eauto; solve_expr_lt.
-    Qed.
-
-    Lemma ewn_reuse sk {t} (e : expr t) l :
-      es_with_nonces sk e l -> whp_function l -> no_nonce_reuse sk e.
-    Proof.
-      cbv [no_nonce_reuse]; eauto using ewn_reuse'.
-    Qed.
-
-    Definition ewn_safe sk {t} (e : expr t) :=
-      exists l, es_with_nonces sk e l /\ whp_function l.
-
-    Lemma fill_eq_mod_enc sk nonce msg1 msg2 {t}
-          (eh : expr_with_hole tmessage t) :
-      eqwhp (len@msg1) (len@msg2) ->
-      eq_mod_enc sk
-                 (fill_hole eh (encrypt@(keygen@$sk, nonce, msg1)))
-                 (fill_hole eh (encrypt@(keygen@$sk, nonce, msg2))).
-    Proof.
-      intros; induction eh; cbn [fill_hole]; econstructor; eauto.
-    Qed.
+    (* If:
+     * - allowing for eqwhp transports
+     * - the secret key is used correctly
+     * - nonces aren't reused
+     * - both sides are syntactically the same,
+     *   except for the inputs to encrypt
+     * - the inputs to encrypt have lengths which correspond in the same way
+     * Then:
+     * - the two sides are indistinguishable *)
+    Definition confidentiality_conclusion :=
+      forall (sk : positive) {t} (a b : expr t),
+        encrypt_pair sk a b ->
+        a ≈ b.
 
     Context (conf : confidentiality_conclusion).
-
-    Lemma ewn_rewrite (sk : positive) {t} (e1 e2 : expr t) :
-      ewn_safe sk e1 ->
-      eq_mod_enc sk e1 e2 ->
-      ewn_safe sk e2 ->
-      e1 ≈ e2.
-    Proof.
-      intros (?&?&?) ? (?&?&?).
-      eauto 6 using conf, ewn_encrypt_safe, ewn_reuse.
-    Qed.
 
     Lemma fill_confidentiality sk nonce msg1 msg2 {t}
           (eh : expr_with_hole tmessage t) e1 :
       e1 = fill_hole eh (encrypt@(keygen@$sk, nonce, msg1)) ->
-      ewn_safe sk e1 ->
       let e2 := fill_hole eh (encrypt@(keygen@$sk, nonce, msg2)) in
-      eqwhp (len@msg1) (len@msg2) ->
-      ewn_safe sk e2 ->
+      encrypt_pair sk e1 e2 ->
       e1 ≈ e2.
-    Proof.
-      intros ?? e2 ??.
-      subst e1 e2.
-      eapply ewn_rewrite; eauto using fill_eq_mod_enc.
-    Qed.
+    Proof. eauto using conf. Qed.
   End SymmetricEncrypt.
 
   Lemma NoDup_nth_error_Some_neq {T} l
@@ -2940,9 +2738,6 @@ Section Language.
         typeclasses eauto with nocore ]
     end.
 
-  Create HintDb es_with_nonces discriminated.
-  Hint Extern 0 (_ <> _) => solve_neq_from_NoDup : es_with_nonces.
-  Hint Constructors es_with_nonces : es_with_nonces.
   Ltac solve_eq_fill_hole_r :=
     try lazymatch goal with
         | |- eqwhp _ _ => apply (eq_subrelation Reflexive_eqwhp)
@@ -3033,14 +2828,29 @@ Section Language.
        |]
     end.
 
-  Ltac solve_ewn :=
+  Ltac ep_econstructor :=
+    (* avoid weakening, which loops; this is faster than eapply *)
+    (econstructor 1 ||
+     econstructor 2 ||
+     econstructor 3 ||
+     econstructor 4 ||
+     econstructor 5 ||
+     econstructor 6).
+
+  Ltac solve_encrypt_pair' nongreed nongreedy :=
     repeat lazymatch goal with
-           | |- ewn_safe _ _ => eexists; split
-           | |- es_with_nonces _ _ _ => econstructor
+           | |- encrypt_pair _ _ _ => eexists; split
+           | |- encrypt_pair_nonces ?sk ?x ?y ?l =>
+             tryif nongreed sk x y l
+             then nongreedy sk x y l
+             else ep_econstructor
            | |- _ <> _ => solve_neq_from_NoDup
            | |- whp_function _ =>
              cbv [app]; dedup_whp_function; solve_whp_compatible
            end.
+
+  Tactic Notation "solve_encrypt_pair" tactic3(nongreed) tactic3(nongreedy) :=
+    solve_encrypt_pair' nongreed nongreedy.
 
   Section ExampleProtocol1.
     Context {tmessage tnat tsignature tskey tpkey : type}
@@ -3133,10 +2943,18 @@ Section Language.
               rewrite (fill_confidentiality confidentiality sk nonce msg1 msg2)
                 by
                   (solve_eq_fill_hole_r ||
-                   solve_ewn ||
-                   exact (eq_len_skey2message_skeygen _ _));
-            cbv [fill_hole refine_hole without_holes choice_ctx])
-      end.
+                   solve_encrypt_pair
+                     (fun _ x _ _ =>
+                        lazymatch x with
+                        | (len@_)%expr => idtac
+                        end)
+                     (fun _ x _ _ =>
+                        eapply ep_transport;
+                        [reflexivity |
+                         eapply eq_len_skey2message_skeygen |
+                         eapply ep_app]));
+              cbv [fill_hole refine_hole without_holes choice_ctx])
+        end.
     Qed.
   End ExampleProtocol1.
 
@@ -3161,8 +2979,9 @@ Section Language.
             {erase_message_len :
                forall m, eqwhp (len@m) (len@(erase_message@m))}.
 
-    Local Notation es_with_nonces := (fun k => @es_with_nonces tmessage tkey tnonce ekeygen encrypt k _).
-    Local Notation eq_mod_enc := (fun k => @eq_mod_enc tmessage tnat len tkey tnonce ekeygen encrypt k _).
+    Local Notation encrypt_pair_nonces :=
+      (fun k => @encrypt_pair_nonces tmessage tnat len tkey tnonce
+                                     ekeygen encrypt k _).
 
     Definition input : type := tmessage.
     Definition output : type := tmessage.
@@ -3202,198 +3021,106 @@ Section Language.
         let outputs_erase := (ffst@e_erase)%expr in
         eqwhp (fsnd@e) (ekeygen@($rK)) /\
         eqwhp (fsnd@e_erase) (ekeygen@($rK)) /\
-        exists outputs' l outputs_erase' l_erase,
-          eqwhp outputs outputs' /\
-          eqwhp outputs_erase outputs_erase' /\
-          (es_with_nonces rK outputs' l /\
+        exists l,
+          (encrypt_pair_nonces rK outputs outputs_erase l /\
            whp_function l /\
            forall nce msg, List.In (nce, msg) l ->
                            exists i,
                              nce = (random_nonce@($i))%expr /\
-                             expr_old n nce) /\
-          (es_with_nonces rK outputs_erase' l_erase /\
-           whp_function l_erase /\
-           forall nce msg, List.In (nce, msg) l_erase ->
-                           exists i,
-                             nce = (random_nonce@($i))%expr /\
-                             expr_old n nce) /\
-          eq_mod_enc rK outputs' outputs_erase'
+                             expr_old n nce)
     .
     Proof.
       induction n.
       { cbn; cbv [init].
         let r := repeat (setoid_rewrite ffst_pair || setoid_rewrite fsnd_pair) in
-        split; [|split; [|do 4 eexists; split; [|split]]];
-          [r; reflexivity ..|].
-        split; [|split].
-        { split; [|split].
-          - solve_ewn.
-          - solve_ewn.
-          - intros ?? H.
-            destruct H. }
-        { split; [|split].
-          - solve_ewn.
-          - solve_ewn.
-          - intros ?? H.
-            destruct H. }
-        { econstructor. }
+        split; [|split];
+          [r; reflexivity ..|r].
+        eexists; split; [|split].
+        - solve_encrypt_pair (fail) idtac.
+        - solve_encrypt_pair (fail) idtac.
+        - intros; exfalso; eauto using in_nil.
       }
-      {
-        cbn [interaction].
+      { cbn [interaction].
         generalize dependent (interaction init step n); intro e.
         generalize dependent (interaction init step_erase n); intro e_erase.
         intros.
         cbv [step fill_alpha renumber fill_hole].
-        destruct IHn as (Hstate & Hstate_erase & e' & l' & e_erase' & l_erase' & He' & He_erase' & (Hewn & Hl' & Hnms) & (Hewn_erase & Hl_erase' & Hnms_erase) & Heme).
-
+        destruct IHn as (Hstate & Hstate_erase & l' & Hepn & Hl' & Hnms).
         let r :=
             repeat (setoid_rewrite ffst_pair || setoid_rewrite fsnd_pair
                     || setoid_rewrite if_same || setoid_rewrite app_if
                     || setoid_rewrite Hstate || setoid_rewrite He'
                     || setoid_rewrite Hstate_erase || setoid_rewrite He_erase') in
-        split; [|split; [|do 4 eexists; split; [|split]]];
-          [r; reflexivity ..|].
-        split; [|split].
+        split; [|split];
+          [r; reflexivity ..|r].
+        eexists; split; [|split].
+        (* TODO clean this part up with better tactics *)
         {
-          split; [|split].
-          { solve_ewn; eauto.
-            cbv [rK].
-            lazymatch goal with
-              |- pos_pair (_, _) <> pos_pair (_, _) =>
+          eapply ep_app.
+          eapply ep_pair.
+          { eapply ep_encrypt.
+            - solve_encrypt_pair (fail) idtac.
               let H := fresh in
-              intros H; apply pos_pair_inj_left in H; congruence
-            end. }
-          {
-            cbv [whp_function].
-            intros ????.
-            Local Opaque app.
-            repeat (setoid_rewrite or_False_l || setoid_rewrite or_False_r
-                    || setoid_rewrite or_refl || setoid_rewrite or_assoc
-                    || setoid_rewrite app_nil_l || setoid_rewrite app_nil_r
-                    || setoid_rewrite in_app_iff).
-            Local Transparent app.
-            intros H1 H2.
-
-            echangein uconstr:(_ \/ In _ _) H1.
-            echangein uconstr:(_ \/ In _ _) H2.
-
-            destruct H1; destruct H2;
-              repeat lazymatch goal with
-                     | H : (_, _) = (_, _) |- _ => inversion_clear H
-                     end;
-              [ apply whp_contract; fold_eqwhp; reflexivity | | |
-                solve [eauto] ];
-              deny_cond;
-              repeat lazymatch goal with
-                     | H : In (?x, ?y) l' |- _ =>
-                       destruct (Hnms _ _ H) as (?&?&?);
-                         clear H;
-                         subst;
-                         cbn [expr_old] in *
-                     | |- whp (~ random_nonce@?x1 == random_nonce@?x2) =>
-                       rewrite not_impl_false;
-                         apply (whp_impl_trans _ (x1 == x2));
-                         [ solve [apply random_nonce_inj]
-                         | rewrite <-not_impl_false;
-                           apply inequal_rand ]
-                     | |- pos_pair _ <> _ => solve [intro; eapply old_different; eauto]
-                     | |- _ <> pos_pair _ => solve [intro; eapply old_different; eauto]
-                     end.
+              intros H; apply pos_pair_inj_left in H; congruence.
+            - eapply ep_transport;
+                [reflexivity|eapply erase_message_len|eapply ep_app].
+              eapply ep_adv.
+              eapply Hepn.
+            - eapply ep_adv.
+              eapply Hepn.
+            - eapply ep_app.
+              eapply ep_adv.
+              eapply Hepn.
           }
-          { intros n' m'.
-
-            Local Opaque app.
-            repeat (setoid_rewrite or_False_l || setoid_rewrite or_False_r
-                    || setoid_rewrite or_refl || setoid_rewrite or_assoc
-                    || setoid_rewrite app_nil_l || setoid_rewrite app_nil_r
-                    || setoid_rewrite in_app_iff).
-            Local Transparent app.
-
-            intros Hnm; destruct Hnm as [Hnm|Hnm].
-            { inversion Hnm.
-              subst n' m'.
-              eexists; split; [reflexivity|].
-              cbv [expr_old index_old]; rewrite pos_pair_inv_r; eauto. }
-            { echangein uconstr:(In _ _) Hnm.
-              edestruct (Hnms _ _ Hnm) as (?&?&?);
-                eauto using old_S. }
-          }
+          { eapply Hepn. } }
+        { cbv [whp_function].
+          intros ????.
+          cbn [app In].
+          Local Opaque app.
+          repeat
+            (setoid_rewrite or_False_l || setoid_rewrite or_False_r
+             || setoid_rewrite or_refl || setoid_rewrite or_assoc
+             || setoid_rewrite app_nil_l || setoid_rewrite app_nil_r
+             || setoid_rewrite in_app_iff).
+          Local Transparent app.
+          intros [] [];
+            repeat lazymatch goal with
+                   | H : (_, _) = (_, _) |- _ => inversion_clear H
+                   end;
+            [ apply whp_contract; fold_eqwhp; reflexivity | | |
+              solve [eauto] ];
+            deny_cond;
+            repeat lazymatch goal with
+                   | H : In (?x, ?y) l' |- _ =>
+                     destruct (Hnms _ _ H) as (?&?&?);
+                       clear H;
+                       subst;
+                       cbn [expr_old] in *
+                   | |- whp (~ random_nonce@?x1 == random_nonce@?x2) =>
+                     rewrite not_impl_false;
+                       apply (whp_impl_trans _ (x1 == x2));
+                       [ solve [apply random_nonce_inj]
+                       | rewrite <-not_impl_false;
+                         apply inequal_rand ]
+                   | |- pos_pair _ <> _ => solve [intro; eapply old_different; eauto]
+                   | |- _ <> pos_pair _ => solve [intro; eapply old_different; eauto]
+                   end.
         }
-        { (* very similar proofscript, just put _erase after everything *)
-          split; [|split].
-          { solve_ewn; eauto.
-            cbv [rK].
-            lazymatch goal with
-              |- pos_pair (_, _) <> pos_pair (_, _) =>
-              let H := fresh in
-              intros H; apply pos_pair_inj_left in H; congruence
-            end. }
-          {
-            cbv [whp_function].
-            intros ????.
-            Local Opaque app.
-            repeat (setoid_rewrite or_False_l || setoid_rewrite or_False_r
-                    || setoid_rewrite or_refl || setoid_rewrite or_assoc
-                    || setoid_rewrite app_nil_l || setoid_rewrite app_nil_r
-                    || setoid_rewrite in_app_iff).
-            Local Transparent app.
-            intros H1 H2.
+        { intros n' m'.
+          cbn [app In].
+          Local Opaque app.
+          repeat (setoid_rewrite or_False_l || setoid_rewrite or_False_r
+                  || setoid_rewrite or_refl || setoid_rewrite or_assoc
+                  || setoid_rewrite app_nil_l || setoid_rewrite app_nil_r
+                  || setoid_rewrite in_app_iff).
+          Local Transparent app.
 
-            echangein uconstr:(_ \/ In _ _) H1.
-            echangein uconstr:(_ \/ In _ _) H2.
-
-            destruct H1; destruct H2;
-              repeat lazymatch goal with
-                     | H : (_, _) = (_, _) |- _ => inversion_clear H
-                     end;
-              [ apply whp_contract; fold_eqwhp; reflexivity | | |
-                solve [eauto] ];
-              deny_cond;
-              repeat lazymatch goal with
-                     | H : In (?x, ?y) l_erase' |- _ =>
-                       destruct (Hnms_erase _ _ H) as (?&?&?);
-                         clear H;
-                         subst;
-                         cbn [expr_old] in *
-                     | |- whp (~ random_nonce@?x1 == random_nonce@?x2) =>
-                       rewrite not_impl_false;
-                         apply (whp_impl_trans _ (x1 == x2));
-                         [ solve [apply random_nonce_inj]
-                         | rewrite <-not_impl_false;
-                           apply inequal_rand ]
-                     | |- pos_pair _ <> _ => solve [intro; eapply old_different; eauto]
-                     | |- _ <> pos_pair _ => solve [intro; eapply old_different; eauto]
-                     end.
-          }
-          { intros n' m'.
-
-            Local Opaque app.
-            repeat (setoid_rewrite or_False_l || setoid_rewrite or_False_r
-                    || setoid_rewrite or_refl || setoid_rewrite or_assoc
-                    || setoid_rewrite app_nil_l || setoid_rewrite app_nil_r
-                    || setoid_rewrite in_app_iff).
-            Local Transparent app.
-
-            intros Hnm; destruct Hnm as [Hnm|Hnm].
-            { inversion Hnm.
-              subst n' m'.
-              eexists; split; [reflexivity|].
-              cbv [expr_old index_old]; rewrite pos_pair_inv_r; eauto. }
-            { echangein uconstr:(In _ _) Hnm.
-              edestruct (Hnms_erase _ _ Hnm) as (?&?&?);
-                eauto using old_S. }
-          }
-        }
-        { econstructor.
-          econstructor.
-          econstructor.
-          (* FIXME unsolvable.
-             We need to know that the adversary doesn't produce two
-             distinguishable messages for e' and e_erase'.
-             Of course, we know that the two are indist.
-             This means that their lengths are indist.
-             I think this is the condition we actually want to impose for
-             eq_mod_enc - that the lengths be indist, not eqwhp. *)
-    Abort.
+          intros [Hnm|Hnm].
+          { inversion Hnm.
+            subst n' m'.
+            eexists; split; [reflexivity|].
+            cbv [expr_old index_old]; rewrite pos_pair_inv_r; eauto. }
+          { edestruct (Hnms _ _ Hnm) as (?&?&?); eauto using old_S. } } }
+    Qed.
   End ExampleConfidentiality.
 End Language.

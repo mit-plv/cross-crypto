@@ -2601,6 +2601,12 @@ Section Language.
                     end.
            subst; unpack_whp_push; reflexivity.
     Qed.
+
+    Lemma whp_function_weaken {t1 t2} (l l' : list (expr t1 * expr t2)) :
+      (forall x, In x l -> In x l') ->
+      whp_function l' ->
+      whp_function l.
+    Proof. cbv [whp_function whp_compatible]; eauto. Qed.
   End WHPFunction.
 
   Section SymmetricEncrypt.
@@ -2611,53 +2617,81 @@ Section Language.
             {encrypt : (tkey * tnonce * tmessage -> tmessage)%etype}.
 
     Inductive encrypt_pair_nonces (sk : positive) :
-      forall {t},
-        expr t -> expr t ->
-        list (expr tnonce * expr (tmessage * tmessage)) -> Prop :=
-    | ep_encrypt n n_safety nl lml m m_safety ml m' m'_safety m'l :
-        encrypt_pair_nonces sk n n_safety nl ->
-        encrypt_pair_nonces sk (len@m) (len@m') lml ->
-        encrypt_pair_nonces sk m m_safety ml ->
-        encrypt_pair_nonces sk m'_safety m' m'l ->
+      forall {t}, expr t -> expr t ->
+                  list (expr tnonce * expr tmessage) ->
+                  list (expr tnonce * expr tmessage) -> Prop :=
+    (* I believe the "safety" existentials are not easily removable,
+       because they affect the nonce calculation. -ikdc *)
+    | ep_encrypt n nl
+                 lml lm'l
+                 m m_safety ml m_safetyl
+                 m' m'_safety m'_safetyl m'l :
+        encrypt_pair_nonces sk n n nl nl ->
+        encrypt_pair_nonces sk (len@m) (len@m') lml lm'l ->
+        encrypt_pair_nonces sk m m_safety ml m_safetyl ->
+        encrypt_pair_nonces sk m'_safety m' m'_safetyl m'l ->
         encrypt_pair_nonces sk
                             (encrypt@(keygen@($sk), n, m))
                             (encrypt@(keygen@($sk), n, m'))
-                            ((n, (m, m')%expr) :: nl ++ lml ++ ml ++ m'l)
-    | ep_const {t} v : @encrypt_pair_nonces sk t (#v) (#v) nil
+                            ((n, m) :: nl ++ lml ++ ml ++ m'_safetyl)
+                            ((n, m') :: nl ++ lm'l ++ m_safetyl ++ m'l)
+    | ep_const {t} v : @encrypt_pair_nonces sk t (#v) (#v) nil nil
     | ep_rand (i : positive) :
         i <> sk ->
-        encrypt_pair_nonces sk ($i) ($i) nil
+        encrypt_pair_nonces sk ($i) ($i) nil nil
     (* recurse *)
-    | ep_app {t1 t2} (f : func t1 t2) a b l :
-        encrypt_pair_nonces sk a b l ->
-        encrypt_pair_nonces sk (f@a) (f@b) l
-    | ep_adv {t1 t2} (a b : expr t1) l :
-        encrypt_pair_nonces sk a b l ->
-        encrypt_pair_nonces sk (!t2@a) (!t2@b) l
-    | ep_pair {t1 t2} (a1 b1 : expr t1) l1 (a2 b2 : expr t2) l2 :
-        encrypt_pair_nonces sk a1 b1 l1 ->
-        encrypt_pair_nonces sk a2 b2 l2 ->
-        encrypt_pair_nonces sk (a1, a2) (b1, b2) (l1 ++ l2)
+    | ep_app {t1 t2} (f : func t1 t2) a b al bl :
+        encrypt_pair_nonces sk a b al bl ->
+        encrypt_pair_nonces sk (f@a) (f@b) al bl
+    | ep_adv {t1 t2} (a b : expr t1) al bl :
+        encrypt_pair_nonces sk a b al bl ->
+        encrypt_pair_nonces sk (!t2@a) (!t2@b) al bl
+    | ep_pair {t1 t2} (a1 b1 : expr t1) al1 bl1 (a2 b2 : expr t2) al2 bl2 :
+        encrypt_pair_nonces sk a1 b1 al1 bl1 ->
+        encrypt_pair_nonces sk a2 b2 al2 bl2 ->
+        encrypt_pair_nonces sk (a1, a2) (b1, b2) (al1 ++ al2) (bl1 ++ bl2)
     (* weaken *)
-    | ep_transport {t} (a a' b b' : expr t) l :
+    | ep_transport {t} (a a' b b' : expr t) al bl :
         eqwhp a a' ->
         eqwhp b b' ->
-        encrypt_pair_nonces sk a b l ->
-        encrypt_pair_nonces sk a' b' l
-    (* TODO allow weakening l to any superset.
-       this allows for a more reasonable definition of
-       encrypt-safety
-       (as used in ep_encrypt; see the conditions on n, m, m' ) *)
+        encrypt_pair_nonces sk a b al bl ->
+        encrypt_pair_nonces sk a' b' al bl
+    | ep_nonce_set {t} (a b : expr t) al bl al' bl' :
+        (forall x, In x al -> In x al') ->
+        (forall x, In x bl -> In x bl') ->
+        encrypt_pair_nonces sk a b al bl ->
+        encrypt_pair_nonces sk a b al' bl'
     .
 
+    Lemma epn_symm sk {t} (a b : expr t) al bl :
+      encrypt_pair_nonces sk a b al bl ->
+      encrypt_pair_nonces sk b a bl al.
+    Proof.
+      induction 1.
+      - eapply ep_nonce_set; [| |eapply ep_encrypt; eauto];
+          cbn [In]; intros ?;
+          repeat setoid_rewrite in_app_iff;
+          intuition idtac.
+      - eapply ep_const.
+      - eapply ep_rand; eauto.
+      - eapply ep_app; eauto.
+      - eapply ep_adv; eauto.
+      - eapply ep_pair; eauto.
+      - eapply ep_transport; eassumption.
+      - eapply ep_nonce_set; eauto.
+    Qed.
+
     Definition encrypt_pair sk {t} (a b : expr t) : Prop :=
-      exists l, encrypt_pair_nonces sk a b l /\ whp_function l.
+      exists al bl,
+        encrypt_pair_nonces sk a b al bl /\
+        whp_function al /\
+        whp_function bl.
 
     Global Instance Proper_encrypt_pair_nonces sk {t : type} :
-      Proper (eqwhp ==> eqwhp ==> eq ==> iff)
+      Proper (eqwhp ==> eqwhp ==> eq ==> eq ==> iff)
              (@encrypt_pair_nonces sk t).
     Proof.
-      intros ?? H ?? H' ???; subst.
+      intros ?? H ?? H' ??????; subst.
       split; (intros Hepn; eapply ep_transport;
               solve [eassumption | symmetry; eassumption]).
     Qed.
@@ -2809,12 +2843,6 @@ Section Language.
       in dedup' l (@nil T)
     end.
 
-  Lemma whp_function_weaken {t1 t2} (l l' : list (expr t1 * expr t2)) :
-    (forall x, In x l -> In x l') ->
-    whp_function l' ->
-    whp_function l.
-  Proof. cbv [whp_function whp_compatible]; eauto. Qed.
-
   Ltac dedup_whp_function :=
     lazymatch goal with
       |- whp_function ?l =>
@@ -2837,12 +2865,13 @@ Section Language.
      econstructor 5 ||
      econstructor 6).
 
+  (* TODO use ep_nonce_set to dedup the list as it's constructed *)
   Ltac solve_encrypt_pair' nongreed nongreedy :=
     repeat lazymatch goal with
-           | |- encrypt_pair _ _ _ => eexists; split
-           | |- encrypt_pair_nonces ?sk ?x ?y ?l =>
-             tryif nongreed sk x y l
-             then nongreedy sk x y l
+           | |- encrypt_pair _ _ _ => eexists; eexists; split; [|split]
+           | |- encrypt_pair_nonces ?sk ?x ?y ?al ?bl =>
+             tryif nongreed sk x y al bl
+             then nongreedy sk x y al bl
              else ep_econstructor
            | |- _ <> _ => solve_neq_from_NoDup
            | |- whp_function _ =>
@@ -2852,7 +2881,7 @@ Section Language.
   Tactic Notation "solve_encrypt_pair" tactic3(nongreed) tactic3(nongreedy) :=
     solve_encrypt_pair' nongreed nongreedy.
 
-  Section ExampleProtocol1.
+  Section Example1AuthConf.
     Context {tmessage tnat tsignature tskey tpkey : type}
             {len : (tmessage -> tnat)%etype}.
 
@@ -2875,9 +2904,9 @@ Section Language.
     Context {tkey tnonce : type}
             {ekeygen : (trand -> tkey)%etype}
             {encrypt : (tkey * tnonce * tmessage -> tmessage)%etype}
-            {decrypt : (tkey * tnonce * tmessage -> tmessage)%etype}
+            {decrypt : (tkey * tmessage -> tmessage)%etype}
             (decrypt_encrypt : forall k n m,
-                eqwhp (decrypt@(ekeygen@($k), n, encrypt@(ekeygen@($k), n, m))) m)
+                eqwhp (decrypt@(ekeygen@($k), encrypt@(ekeygen@($k), n, m))) m)
             {confidentiality :
                @confidentiality_conclusion tmessage tnat len
                                            tkey tnonce
@@ -2898,7 +2927,7 @@ Section Language.
     Context (skn1 skn2 Kn irrelevant : positive)
             (nodup : NoDup (skn1 :: skn2 :: Kn :: irrelevant :: nil)%list).
 
-    Example auth_from_conf :
+    Example example_1_auth_from_conf :
       whp (
           let sk1 := ekeygen@($skn1) in
           let sk2 := mkeygen@($skn2) in
@@ -2914,7 +2943,7 @@ Section Language.
           let adv_out_mac := fsnd@(ffst@adv_out_1) in
           let adv_out_msg := fsnd@adv_out_1 in
           let check_out := mverify@(id_f@sk2, adv_out_enc, adv_out_mac) in
-          let dec_out := decrypt@(sk1, #N, adv_out_enc) in
+          let dec_out := decrypt@(sk1, adv_out_enc) in
           let dec_msg := dec_out in
           let sK' := message2skey@dec_msg in
           let sign_out := sign@(sK', adv_out_msg) in
@@ -2944,11 +2973,11 @@ Section Language.
                 by
                   (solve_eq_fill_hole_r ||
                    solve_encrypt_pair
-                     (fun _ x _ _ =>
+                     (fun _ x _ _ _ =>
                         lazymatch x with
                         | (len@_)%expr => idtac
                         end)
-                     (fun _ x _ _ =>
+                     (fun _ _ _ _ _ =>
                         eapply ep_transport;
                         [reflexivity |
                          eapply eq_len_skey2message_skeygen |
@@ -2956,9 +2985,9 @@ Section Language.
               cbv [fill_hole refine_hole without_holes choice_ctx])
         end.
     Qed.
-  End ExampleProtocol1.
+  End Example1AuthConf.
 
-  Section ExampleConfidentiality.
+  Section Example2Confidentiality.
     Context {tmessage tnat : type}
             {len : (tmessage -> tnat)%etype}.
 
@@ -2968,9 +2997,6 @@ Section Language.
             {random_nonce_inj : forall x y,
                 whp (random_nonce@x == random_nonce@y -> x == y)}
             {encrypt : (tkey * tnonce * tmessage -> tmessage)%etype}
-            {decrypt : (tkey * tnonce * tmessage -> tmessage)%etype}
-            (decrypt_encrypt : forall k n m,
-                eqwhp (decrypt@(ekeygen@($k), n, encrypt@(ekeygen@($k), n, m))) m)
             {confidentiality :
                @confidentiality_conclusion tmessage tnat len
                                            tkey tnonce
@@ -2983,17 +3009,17 @@ Section Language.
       (fun k => @encrypt_pair_nonces tmessage tnat len tkey tnonce
                                      ekeygen encrypt k _).
 
-    Definition input : type := tmessage.
-    Definition output : type := tmessage.
-    Definition state : type := tkey.
+    Definition E2_input : type := tmessage.
+    Definition E2_output : type := tmessage.
+    Definition E2_state : type := tkey.
 
     Let K := 1%positive.
     Let rK := pos_pair (0%nat, K)%core.
 
-    Definition init : expr (tlist output * state) :=
+    Definition E2_init : expr (tlist E2_output * E2_state) :=
       (#cnil, ekeygen@($K))%expr.
 
-    Definition step : expr_with_hole (input * state) (output * state) :=
+    Definition E2_step : expr_with_hole (E2_input * E2_state) (E2_output * E2_state) :=
       (
         let i_s := ewh_hole in
         let msg := ffst@i_s in
@@ -3001,7 +3027,7 @@ Section Language.
         (encrypt@(key, random_nonce@($1), msg), key)
       )%ewh.
 
-    Definition step_erase : expr_with_hole (input * state) (output * state) :=
+    Definition E2_step_erase : expr_with_hole (E2_input * E2_state) (E2_output * E2_state) :=
       (
         let i_s := ewh_hole in
         let msg := ffst@i_s in
@@ -3014,38 +3040,46 @@ Section Language.
     Context (fsnd_pair : forall t1 t2 (e1 : expr t1) (e2 : expr t2),
                 eqwhp (fsnd@(e1, e2)) e2).
 
-    Lemma example_confidentiality_safe n :
-        let e := interaction init step n in
+    Example example_2_confidentiality n :
+        let e := interaction E2_init E2_step n in
         let outputs := (ffst@(e))%expr in
-        let e_erase := interaction init step_erase n in
+        let e_erase := interaction E2_init E2_step_erase n in
         let outputs_erase := (ffst@e_erase)%expr in
-        eqwhp (fsnd@e) (ekeygen@($rK)) /\
-        eqwhp (fsnd@e_erase) (ekeygen@($rK)) /\
-        exists l,
-          (encrypt_pair_nonces rK outputs outputs_erase l /\
-           whp_function l /\
-           forall nce msg, List.In (nce, msg) l ->
-                           exists i,
-                             nce = (random_nonce@($i))%expr /\
-                             expr_old n nce)
-    .
+        outputs ≈ outputs_erase.
     Proof.
+      intros.
+      enough (eqwhp (fsnd@e) (ekeygen@($rK)) /\
+              eqwhp (fsnd@e_erase) (ekeygen@($rK)) /\
+              exists l l_erase,
+                encrypt_pair_nonces rK outputs outputs_erase l l_erase /\
+                whp_function l /\
+                whp_function l_erase /\
+                forall nce msg,
+                  (In (nce, msg) l \/ In (nce, msg) l_erase) ->
+                  exists i,
+                    nce = (random_nonce@($i))%expr /\
+                    expr_old n nce) as (_&_&?&?&?&?&?&_)
+          by (eapply confidentiality; cbv [encrypt_pair]; eauto).
+      revert e outputs e_erase outputs_erase.
       induction n.
-      { cbn; cbv [init].
+      { cbn; cbv [E2_init].
         let r := repeat (setoid_rewrite ffst_pair || setoid_rewrite fsnd_pair) in
         split; [|split];
           [r; reflexivity ..|r].
-        eexists; split; [|split].
+        do 2 eexists; split; [|split; [|split]].
         - solve_encrypt_pair (fail) idtac.
         - solve_encrypt_pair (fail) idtac.
-        - intros; exfalso; eauto using in_nil.
+        - solve_encrypt_pair (fail) idtac.
+        - intros; exfalso; intuition eauto using in_nil.
       }
       { cbn [interaction].
-        generalize dependent (interaction init step n); intro e.
-        generalize dependent (interaction init step_erase n); intro e_erase.
+        generalize dependent (interaction E2_init E2_step n); intro e.
+        generalize dependent (interaction E2_init E2_step_erase n); intro e_erase.
         intros.
-        cbv [step fill_alpha renumber fill_hole].
-        destruct IHn as (Hstate & Hstate_erase & l' & Hepn & Hl' & Hnms).
+        cbv [E2_step fill_alpha renumber fill_hole].
+        destruct IHn as
+            (Hstate & Hstate_erase &
+             l' & l_erase' & Hepn & Hl' & Hl_erase' & Hnms).
         let r :=
             repeat (setoid_rewrite ffst_pair || setoid_rewrite fsnd_pair
                     || setoid_rewrite if_same || setoid_rewrite app_if
@@ -3053,7 +3087,7 @@ Section Language.
                     || setoid_rewrite Hstate_erase || setoid_rewrite He_erase') in
         split; [|split];
           [r; reflexivity ..|r].
-        eexists; split; [|split].
+        do 2 eexists; split; [|split; [|split]].
         (* TODO clean this part up with better tactics *)
         {
           eapply ep_app.
@@ -3091,8 +3125,43 @@ Section Language.
               solve [eauto] ];
             deny_cond;
             repeat lazymatch goal with
-                   | H : In (?x, ?y) l' |- _ =>
-                     destruct (Hnms _ _ H) as (?&?&?);
+                   | H : _ \/ _ |- _ => destruct H
+                   | H : In (?x, ?y) _ |- _ =>
+                     destruct (Hnms _ _ (ltac:(eauto using H))) as (?&?&?);
+                       clear H;
+                       subst;
+                       cbn [expr_old] in *
+                   | |- whp (~ random_nonce@?x1 == random_nonce@?x2) =>
+                     rewrite not_impl_false;
+                       apply (whp_impl_trans _ (x1 == x2));
+                       [ solve [apply random_nonce_inj]
+                       | rewrite <-not_impl_false;
+                         apply inequal_rand ]
+                   | |- pos_pair _ <> _ => solve [intro; eapply old_different; eauto]
+                   | |- _ <> pos_pair _ => solve [intro; eapply old_different; eauto]
+                   end.
+        }
+        { cbv [whp_function].
+          intros ????.
+          cbn [app In].
+          Local Opaque app.
+          repeat
+            (setoid_rewrite or_False_l || setoid_rewrite or_False_r
+             || setoid_rewrite or_refl || setoid_rewrite or_assoc
+             || setoid_rewrite app_nil_l || setoid_rewrite app_nil_r
+             || setoid_rewrite in_app_iff).
+          Local Transparent app.
+          intros [] [];
+            repeat lazymatch goal with
+                   | H : (_, _) = (_, _) |- _ => inversion_clear H
+                   end;
+            [ apply whp_contract; fold_eqwhp; reflexivity | | |
+              solve [eauto] ];
+            deny_cond;
+            repeat lazymatch goal with
+                   | H : _ \/ _ |- _ => destruct H
+                   | H : In (?x, ?y) _ |- _ =>
+                     destruct (Hnms _ _ (ltac:(eauto using H))) as (?&?&?);
                        clear H;
                        subst;
                        cbn [expr_old] in *
@@ -3108,19 +3177,229 @@ Section Language.
         }
         { intros n' m'.
           cbn [app In].
+
+          assert (forall A B, (A \/ A \/ B) <-> (A \/ B)) as or_refl_l
+              by (intuition idtac).
           Local Opaque app.
           repeat (setoid_rewrite or_False_l || setoid_rewrite or_False_r
                   || setoid_rewrite or_refl || setoid_rewrite or_assoc
+                  || setoid_rewrite or_refl_l
                   || setoid_rewrite app_nil_l || setoid_rewrite app_nil_r
                   || setoid_rewrite in_app_iff).
           Local Transparent app.
 
-          intros [Hnm|Hnm].
-          { inversion Hnm.
-            subst n' m'.
-            eexists; split; [reflexivity|].
-            cbv [expr_old index_old]; rewrite pos_pair_inv_r; eauto. }
-          { edestruct (Hnms _ _ Hnm) as (?&?&?); eauto using old_S. } } }
+          intros [Hnm|[Hnm|[Hnm|Hnm]]];
+            solve [ inversion Hnm;
+                    subst n' m';
+                    eexists; split; [reflexivity|];
+                    cbv [expr_old index_old]; rewrite pos_pair_inv_r; eauto
+                  | edestruct (Hnms _ _ (ltac:(eauto using Hnm)))
+                    as (?&?&?); eauto using old_S ]. } }
     Qed.
-  End ExampleConfidentiality.
+  End Example2Confidentiality.
+
+  Section Example3HonestKerberos.
+    Context {tmessage tnat : type}
+            {len : (tmessage -> tnat)%etype}.
+
+    Context {tmac tmkey : type}
+            {mkeygen : (trand -> tmkey)%etype}
+            {mac : (tmkey * tmessage -> tmac)%etype}
+            {mverify : (tmkey * tmessage * tmac -> tbool)%etype}
+            {mac_correct :
+               @auth_conclusion tmessage tmac tmkey tmkey tunit
+                                mkeygen id_f unit_f mac mverify}.
+
+    Context {tkey tnonce : type}
+            {ekeygen : (trand -> tkey)%etype}
+            {random_nonce : (trand -> tnonce)%etype}
+            {random_nonce_inj : forall x y,
+                whp (random_nonce@x == random_nonce@y -> x == y)}
+            {encrypt : (tkey * tnonce * tmessage -> tmessage)%etype}
+            {decrypt : (tkey * tmessage -> tmessage)%etype}
+            (decrypt_encrypt : forall k n m,
+                eqwhp (decrypt@(ekeygen@($k), encrypt@(ekeygen@($k), n, m))) m)
+            {confidentiality :
+               @confidentiality_conclusion tmessage tnat len
+                                           tkey tnonce
+                                           ekeygen encrypt}
+            {erase_message : (tmessage -> tmessage)%etype}
+            {erase_message_len :
+               forall m, eqwhp (len@m) (len@(erase_message@m))}.
+
+    Local Notation encrypt_pair_nonces :=
+      (fun k => @encrypt_pair_nonces tmessage tnat len tkey tnonce
+                                     ekeygen encrypt k _).
+
+    Context {encode : forall t, (t -> tmessage)%etype}
+            {decode : forall t, (tmessage -> t)%etype}
+            {decode_encode : forall t (x : expr t),
+                eqwhp (decode t @ (encode t @ x)) x}.
+    Arguments encode {t}.
+    Arguments decode {t}.
+    Arguments decode_encode {t}.
+
+    Definition E3_id := tbool. (* client id *)
+
+    Definition E3_state : type :=
+      ((tkey * tmkey) * (tkey * tmkey)) * (* client keys *)
+      ((tlist (E3_id * tmessage)) * (* attacker-input (sender, message) log *)
+       (tlist (E3_id * tmessage))) (* verified (sender, message) log *)
+    .
+
+    Let eK1 := 1%positive.
+    Let eK2 := 2%positive.
+    Let reK1 := pos_pair (0%nat, eK1)%core.
+    Let reK2 := pos_pair (0%nat, eK2)%core.
+
+    Let mK1 := 1%positive.
+    Let mK2 := 2%positive.
+    Let rmK1 := pos_pair (0%nat, mK1)%core.
+    Let rmK2 := pos_pair (0%nat, mK2)%core.
+
+    Definition E3_server_input : type := E3_id * E3_id. (* parties *)
+    Definition E3_server_output : type :=
+      (tmessage * tmac) * (tmessage * tmac). (* tickets for both parties *)
+
+    Definition E3_server : expr_with_hole (E3_server_input * E3_state)
+                                          (E3_server_output * E3_state) :=
+      (
+        let input := ffst@ewh_hole in
+        let state := fsnd@ewh_hole in
+        let i := ffst@input in
+        let j := fsnd@input in
+        let keys := ffst@state in
+        let k1 := ffst@keys in
+        let k2 := fsnd@keys in
+        let ki := (eif i then k1 else k2) in
+        let eki := ffst@ki in
+        let mki := fsnd@ki in
+        let session_key := mkeygen@($1) in
+        let ticketi := encode@(j, session_key) in
+        let msgi := encrypt@(eki, random_nonce@($2), ticketi) in
+        let mmsgi := mac@(mki, msgi) in
+        let kj := (eif j then k1 else k2) in
+        let ekj := ffst@kj in
+        let mkj := fsnd@kj in
+        let ticketj := encode@(i, session_key) in
+        let msgj := encrypt@(ekj, random_nonce@($3), ticketj) in
+        let mmsgj := mac@(mkj, msgj) in
+        (((msgi, mmsgi), (msgj, mmsgj)), state)
+      )%ewh.
+
+    Definition E3_client_input : type :=
+      tbool * (* self *)
+      (tmessage * tmac) * (* encrypted ticket *)
+      (tbool * (* sign/verify *)
+       tmessage * (* message to sign or verify *)
+       tmac). (* (verify: tag) *)
+
+    Definition E3_client_output : type := tmac. (* (sign) *)
+
+    Local Notation "'require' a 'fail' b ; c" :=
+      (eif a then c else b)%ewh
+                            (right associativity,
+                             at level 100) : ewh_scope.
+
+    Definition E3_client : expr_with_hole (E3_client_input * E3_state)
+                                          (E3_client_output * E3_state) :=
+      (
+        let input := ffst@ewh_hole in
+        let state := fsnd@ewh_hole in
+        let self := ffst@(ffst@input) in
+        let mticket := fsnd@(ffst@input) in
+        let operation := fsnd@input in
+        let keys := ffst@state in
+        let k1 := ffst@keys in
+        let k2 := fsnd@keys in
+        let kself := (eif self then k1 else k2) in
+        let ekself := ffst@kself in
+        let mkself := fsnd@kself in
+        let eticket := ffst@mticket in
+        let ticket_tag := fsnd@mticket in
+        require mverify@(mkself, eticket, ticket_tag) fail (#!, state);
+          let ticket : expr_with_hole _ (E3_id * tmkey) :=
+              decode@(decrypt@(ekself, eticket)) in
+          let other := ffst@ticket in
+          let session_key := fsnd@ticket in
+          let op_type := ffst@(ffst@operation) in
+          (eif op_type
+           then (* sign *)
+             let message := fsnd@(ffst@operation) in
+             let log := fsnd@state in
+             let input_log := ffst@log in
+             let output_log := fsnd@log in
+             let new_state := (keys, (fcons@((self, message), input_log),
+                                      output_log)) in
+             (mac@(session_key, message), new_state)
+           else (* verify *)
+             let message := fsnd@(ffst@operation) in
+             let message_tag := fsnd@operation in
+             require mverify@(session_key, message, message_tag)
+                     fail (#!, state);
+               let log := fsnd@state in
+               let input_log := ffst@log in
+               let output_log := fsnd@log in
+               let new_state :=
+                   (keys, (input_log,
+                           (fcons@((other, message), output_log)))) in
+               (#!, new_state)
+          )
+      )%ewh.
+
+    Definition E3_input : type := tbool * (E3_server_input * E3_client_input).
+    Definition E3_output : type := E3_server_output * E3_client_output.
+
+    Definition E3_init : expr (tlist E3_output * E3_state) :=
+      (#cnil, (((ekeygen@($eK1), mkeygen@($mK1)),
+                (ekeygen@($eK2), mkeygen@($mK2))),
+               (#cnil, #cnil))).
+
+    Notation "a [ b ]" := (refine_hole b a)%ewh
+                                           (at level 10) : ewh_scope.
+
+    Definition E3_step : expr_with_hole (E3_input * E3_state)
+                                        (E3_output * E3_state) :=
+      (
+        let input := ffst@ewh_hole in
+        let state := fsnd@ewh_hole in
+        let server_client := ffst@input in
+        (eif server_client
+         then
+           let server_input := ffst@(fsnd@input) in
+           let server := E3_server[(server_input, state)] in
+           ((ffst@server, #!), fsnd@server)
+         else
+           let client_input := fsnd@(fsnd@input) in
+           let client := E3_client[(client_input, state)] in
+           ((#!, ffst@client), fsnd@client)
+        )
+      )%ewh.
+
+    Context (ffst_pair : forall t1 t2 (e1 : expr t1) (e2 : expr t2),
+                eqwhp (ffst@(e1, e2)) e1).
+    Context (fsnd_pair : forall t1 t2 (e1 : expr t1) (e2 : expr t2),
+                eqwhp (fsnd@(e1, e2)) e2).
+
+    Context (f_in : forall t, (t * (tlist t) -> tbool)%etype).
+    Arguments f_in {t}.
+    Context (f_in_nil : forall t x, eqwhp (f_in@(x, #(@cnil t)))
+                                          #vfalse)
+            (f_in_cons : forall t x y (l : expr (tlist t)),
+                eqwhp (f_in@(x, fcons@(y, l)))
+                      (x == y \/ f_in@(x, l))).
+
+    Example example_3_authenticity n :
+      (
+        let e := interaction E3_init E3_step n in
+        let log := fsnd@(fsnd@e) in
+        let input_log := ffst@log in
+        let output_log := fsnd@log in
+        forall x,
+          whp (f_in@(x, output_log) ->
+               f_in@(x, input_log))
+      )%expr.
+    Proof.
+    Abort.
+  End Example3HonestKerberos.
 End Language.

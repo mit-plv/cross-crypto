@@ -66,21 +66,6 @@ Section Language.
   (* TODO: use a map with a canonical representation *)
   Global Instance randomness_map_eq_dec {eta} : EqDec (PositiveMap.tree (interp_type trand eta)). Admitted.
 
-  Context (ffst : forall t1 t2, (t1 * t2 -> t1)%etype)
-          (fsnd : forall t1 t2, (t1 * t2 -> t2)%etype)
-          (tlist : type -> type)
-          (cnil : forall t eta, interp_type (tlist t) eta)
-          (fcons : forall t, func (t * tlist t) (tlist t))
-          (tunit : type)
-          (unit_f : forall {t}, (t -> tunit)%etype)
-          (id_f : forall {t}, (t -> t)%etype).
-  Global Arguments ffst {_ _}.
-  Global Arguments fsnd {_ _}.
-  Global Arguments cnil {_} _.
-  Global Arguments fcons {_}.
-  Global Arguments id_f {t}.
-  Global Arguments unit_f {t}.
-
   Context (cast_rand : forall eta, Bvector eta -> interp_type trand eta).
   Section GenerateRandomness.
     Context (eta:nat).
@@ -1931,6 +1916,53 @@ Section Language.
     Proof. cbv [eqwhp]; unpack_whp; btauto. Qed.
   End MoreLemmas.
 
+  Context {tunit : type}
+          {funit : forall {t}, (t -> tunit)%etype}
+          {f_id : forall {t}, (t -> t)%etype}.
+  Global Arguments f_id {t}.
+  Global Arguments funit {t}.
+  Context {unit_eq : forall a b : expr tunit, eqwhp a b}.
+  Context {f_id_eq : forall {t} (x : expr t), eqwhp (f_id@x) x}.
+  Global Arguments f_id_eq {t}.
+
+  Context {ffst : forall t1 t2, (t1 * t2 -> t1)%etype}
+          {fsnd : forall t1 t2, (t1 * t2 -> t2)%etype}.
+  Global Arguments ffst {t1 t2}.
+  Global Arguments fsnd {t1 t2}.
+  Context {ffst_pair : forall t1 t2 (e1 : expr t1) (e2 : expr t2),
+              eqwhp (ffst@(e1, e2)) e1}
+          {fsnd_pair : forall t1 t2 (e1 : expr t1) (e2 : expr t2),
+              eqwhp (fsnd@(e1, e2)) e2}.
+  Global Arguments ffst_pair {t1 t2}.
+  Global Arguments fsnd_pair {t1 t2}.
+
+  Context {tlist : type -> type}
+          {cnil : forall t eta, interp_type (tlist t) eta}
+          {fcons : forall t, func (t * tlist t) (tlist t)}.
+  Global Arguments cnil {t}.
+  Global Arguments fcons {t}.
+
+  Context {f_in : forall t, (t * (tlist t) -> tbool)%etype}.
+  Global Arguments f_in {t}.
+  Context {f_in_nil : forall {t} x, eqwhp (f_in@(x, #(@cnil t)))
+                                        #vfalse}
+          {f_in_cons : forall {t} x y (l : expr (tlist t)),
+              eqwhp (f_in@(x, fcons@(y, l)))
+                    (x == y \/ f_in@(x, l))}.
+  Global Arguments f_in_nil {t}.
+  Global Arguments f_in_cons {t}.
+
+  Context {tmessage : type}
+          {encode : forall t, (t -> tmessage)%etype}
+          {decode : forall t, (tmessage -> t)%etype}
+          {decode_encode : forall t (x : expr t),
+              eqwhp (decode t @ (encode t @ x)) x}
+          {tnat : type}
+          {len : (tmessage -> tnat)%etype}.
+  Global Arguments encode {t}.
+  Global Arguments decode {t}.
+  Global Arguments decode_encode {t}.
+
   Definition expr_in {t} (x : expr t) : list (expr t) -> expr tbool :=
     (fold_right (fun m acc => x == m \/ acc)%expr #vfalse)%expr.
 
@@ -2063,6 +2095,8 @@ Section Language.
       (at level 200, b at level 1000, x at level 1000, y at level 1000,
        format "'[hv' 'eif'  b  '/' '[' 'then'  x  ']' '/' '[' 'else'  y ']' ']'")
     : ewh_scope.
+  Local Notation "a [ b ]" := (refine_hole b a)%ewh
+                                               (at level 10) : ewh_scope.
 
   Ltac build_context x e :=
     match type of x with
@@ -2323,7 +2357,7 @@ Section Language.
   Qed.
 
   Section Authenticity.
-    Context {tmessage ttag tskey tvkey tpkey : type}
+    Context {ttag tskey tvkey tpkey : type}
             {skeygen : (trand -> tskey)%etype}
             {vkeygen : (tskey -> tvkey)%etype}
             {pkeygen : (tskey -> tpkey)%etype}
@@ -2466,13 +2500,13 @@ Section Language.
         fold_eqwhp; reflexivity.
     Qed.
 
-    Context {tmessage ttag tskey tvkey tpkey : type}
+    Context {ttag tskey tvkey tpkey : type}
             {skeygen : (trand -> tskey)%etype}
             {vkeygen : (tskey -> tvkey)%etype}
             {pkeygen : (tskey -> tpkey)%etype}
             {auth : (tskey * tmessage -> ttag)%etype}
             {verify : (tvkey * tmessage * ttag -> tbool)%etype}
-            (auth_correct : @auth_conclusion tmessage ttag tskey tvkey tpkey
+            (auth_correct : @auth_conclusion ttag tskey tvkey tpkey
                                              skeygen vkeygen pkeygen
                                              auth verify).
 
@@ -2523,8 +2557,10 @@ Section Language.
         rewrite fill_if_comm; reflexivity.
     Qed.
 
-    Let auth_safe := @auth_safe tmessage ttag tskey tvkey tpkey
-                                skeygen vkeygen pkeygen auth verify.
+    Local Notation auth_safe :=
+      (@auth_safe ttag tskey tvkey tpkey
+                  skeygen vkeygen pkeygen auth verify).
+
     (* make an opaque copy of verify so that we don't rewrite this lemma
        repeatedly. *)
     Lemma hide_verify : { v | verify = v }.
@@ -2537,7 +2573,7 @@ Section Language.
     Lemma rewrite_verify
           sk {tag m}
           {t e} {C : expr_with_hole _ t} (Hhandler : eqwhp e (fill_hole C m))
-          {choice0 choices} (_ : auth_safe sk _ tag (cons choice0 choices ))
+          {choice0 choices} (_ : auth_safe sk tag (cons choice0 choices ))
           {err : expr t}
       : let ve := (verify@(vkeygen@(skeygen@($sk)), m, tag))%expr in
         let ve' := (verify'@(vkeygen@(skeygen@($sk)), m, tag))%expr in
@@ -2610,9 +2646,7 @@ Section Language.
   End WHPFunction.
 
   Section SymmetricEncrypt.
-    Context {tmessage tnat : type}
-            {len : (tmessage -> tnat)%etype}
-            {tkey tnonce : type}
+    Context {tkey tnonce : type}
             {keygen : (trand -> tkey)%etype}
             {encrypt : (tkey * tnonce * tmessage -> tmessage)%etype}.
 
@@ -2882,15 +2916,14 @@ Section Language.
     solve_encrypt_pair' nongreed nongreedy.
 
   Section Example1AuthConf.
-    Context {tmessage tnat tsignature tskey tpkey : type}
-            {len : (tmessage -> tnat)%etype}.
+    Context {tsignature tskey tpkey : type}.
 
     Context {skeygen : (trand -> tskey)%etype} (* secret key generation  *)
             {pkeygen : (tskey -> tpkey)%etype} (* public part of key *)
             {sign : (tskey * tmessage -> tsignature)%etype}
             {sverify : (tpkey * tmessage * tsignature -> tbool)%etype}
             {signature_correct :
-               @auth_conclusion tmessage tsignature tskey tpkey tpkey
+               @auth_conclusion tsignature tskey tpkey tpkey
                                 skeygen pkeygen pkeygen sign sverify}.
 
     Context {tmac tmkey : type}
@@ -2898,8 +2931,8 @@ Section Language.
             {mac : (tmkey * tmessage -> tmac)%etype}
             {mverify : (tmkey * tmessage * tmac -> tbool)%etype}
             {mac_correct :
-               @auth_conclusion tmessage tmac tmkey tmkey tunit
-                                mkeygen id_f unit_f mac mverify}.
+               @auth_conclusion tmac tmkey tmkey tunit
+                                mkeygen f_id funit mac mverify}.
 
     Context {tkey tnonce : type}
             {ekeygen : (trand -> tkey)%etype}
@@ -2908,18 +2941,12 @@ Section Language.
             (decrypt_encrypt : forall k n m,
                 eqwhp (decrypt@(ekeygen@($k), encrypt@(ekeygen@($k), n, m))) m)
             {confidentiality :
-               @confidentiality_conclusion tmessage tnat len
-                                           tkey tnonce
+               @confidentiality_conclusion tkey tnonce
                                            ekeygen encrypt}.
 
-    (* todo assume tmessage encodings for all types? *)
-    Context {skey2message : (tskey -> tmessage)%etype}
-            {message2skey : (tmessage -> tskey)%etype}
-            (message2skey_skey2message : forall k,
-                eqwhp (message2skey@(skey2message@k)) k)
-            (eq_len_skey2message_skeygen : forall i j,
-                eqwhp (len@(skey2message@(skeygen@($i))))
-                      (len@(skey2message@(skeygen@($j))))).
+    Context {len_encode_skeygen : forall i j,
+                eqwhp (len@(encode@(skeygen@($i))))
+                      (len@(encode@(skeygen@($j))))}.
 
     (* hardcoded nonce *)
     Context {N : forall eta, interp_type tnonce eta}.
@@ -2932,7 +2959,7 @@ Section Language.
           let sk1 := ekeygen@($skn1) in
           let sk2 := mkeygen@($skn2) in
           let sK := skeygen@($Kn) in
-          let msK := skey2message@sK in
+          let msK := encode@sK in
           let pK := pkeygen@sK in
           let enc_out := encrypt@(sk1, #N, msK) in
           let mac_out := mac@(sk2, enc_out) in
@@ -2942,10 +2969,10 @@ Section Language.
           let adv_out_enc := ffst@(ffst@adv_out_1) in
           let adv_out_mac := fsnd@(ffst@adv_out_1) in
           let adv_out_msg := fsnd@adv_out_1 in
-          let check_out := mverify@(id_f@sk2, adv_out_enc, adv_out_mac) in
+          let check_out := mverify@(f_id@sk2, adv_out_enc, adv_out_mac) in
           let dec_out := decrypt@(sk1, adv_out_enc) in
           let dec_msg := dec_out in
-          let sK' := message2skey@dec_msg in
+          let sK' : expr tskey := decode@dec_msg in
           let sign_out := sign@(sK', adv_out_msg) in
           let pK' := pkeygen@sK' in
           let net_in_good := (pK', (sign_out, (adv_out_msg, net_in_1)))%expr in
@@ -2963,12 +2990,12 @@ Section Language.
         match goal with
         | |- whp #vtrue => exact whp_true
         | _ => progress cbv [fill_hole refine_hole without_holes choice_ctx]
-        | _ => progress rewrite ?decrypt_encrypt, ?message2skey_skey2message, ?impl_if, ?if_same, ?feqb_refl
+        | _ => progress rewrite ?decrypt_encrypt, ?decode_encode, ?impl_if, ?if_same, ?feqb_refl
         | _ => rewrite (rewrite_verify mac_correct)       by (solve_eq_fill_hole_r || solve_auth_safe)
         | _ => rewrite (rewrite_verify signature_correct) by (solve_eq_fill_hole_r || solve_auth_safe)
         | |- context[(encrypt@(ekeygen@($?sk), ?nonce, ?msg1))%expr] =>
           progress ( (* speedup: instead of progress, just check that msg2 and msg1 are not syntactically equal *)
-              let msg2 := constr:((skey2message@(skeygen@($ irrelevant)))%expr) in
+              let msg2 := constr:((encode@(skeygen@($ irrelevant)))%expr) in
               rewrite (fill_confidentiality confidentiality sk nonce msg1 msg2)
                 by
                   (solve_eq_fill_hole_r ||
@@ -2980,7 +3007,7 @@ Section Language.
                      (fun _ _ _ _ _ =>
                         eapply ep_transport;
                         [reflexivity |
-                         eapply eq_len_skey2message_skeygen |
+                         eapply len_encode_skeygen |
                          eapply ep_app]));
               cbv [fill_hole refine_hole without_holes choice_ctx])
         end.
@@ -2988,9 +3015,6 @@ Section Language.
   End Example1AuthConf.
 
   Section Example2Confidentiality.
-    Context {tmessage tnat : type}
-            {len : (tmessage -> tnat)%etype}.
-
     Context {tkey tnonce : type}
             {ekeygen : (trand -> tkey)%etype}
             {random_nonce : (trand -> tnonce)%etype}
@@ -2998,16 +3022,14 @@ Section Language.
                 whp (random_nonce@x == random_nonce@y -> x == y)}
             {encrypt : (tkey * tnonce * tmessage -> tmessage)%etype}
             {confidentiality :
-               @confidentiality_conclusion tmessage tnat len
-                                           tkey tnonce
+               @confidentiality_conclusion tkey tnonce
                                            ekeygen encrypt}
             {erase_message : (tmessage -> tmessage)%etype}
             {erase_message_len :
                forall m, eqwhp (len@m) (len@(erase_message@m))}.
 
     Local Notation encrypt_pair_nonces :=
-      (fun k => @encrypt_pair_nonces tmessage tnat len tkey tnonce
-                                     ekeygen encrypt k _).
+      (fun k => @encrypt_pair_nonces tkey tnonce ekeygen encrypt k _).
 
     Definition E2_input : type := tmessage.
     Definition E2_output : type := tmessage.
@@ -3034,11 +3056,6 @@ Section Language.
         let key := fsnd@i_s in
         (encrypt@(key, random_nonce@($1), erase_message@msg), key)
       )%ewh.
-
-    Context (ffst_pair : forall t1 t2 (e1 : expr t1) (e2 : expr t2),
-                eqwhp (ffst@(e1, e2)) e1).
-    Context (fsnd_pair : forall t1 t2 (e1 : expr t1) (e2 : expr t2),
-                eqwhp (fsnd@(e1, e2)) e2).
 
     Example example_2_confidentiality n :
         let e := interaction E2_init E2_step n in
@@ -3076,15 +3093,15 @@ Section Language.
         generalize dependent (interaction E2_init E2_step n); intro e.
         generalize dependent (interaction E2_init E2_step_erase n); intro e_erase.
         intros.
-        cbv [E2_step fill_alpha renumber fill_hole].
+        cbv [E2_step E2_step_erase fill_alpha renumber renumber_h fill_hole].
         destruct IHn as
             (Hstate & Hstate_erase &
              l' & l_erase' & Hepn & Hl' & Hl_erase' & Hnms).
         let r :=
             repeat (setoid_rewrite ffst_pair || setoid_rewrite fsnd_pair
                     || setoid_rewrite if_same || setoid_rewrite app_if
-                    || setoid_rewrite Hstate || setoid_rewrite He'
-                    || setoid_rewrite Hstate_erase || setoid_rewrite He_erase') in
+                    || setoid_rewrite Hstate
+                    || setoid_rewrite Hstate_erase) in
         split; [|split];
           [r; reflexivity ..|r].
         do 2 eexists; split; [|split; [|split]].
@@ -3199,16 +3216,13 @@ Section Language.
   End Example2Confidentiality.
 
   Section Example3HonestKerberos.
-    Context {tmessage tnat : type}
-            {len : (tmessage -> tnat)%etype}.
-
     Context {tmac tmkey : type}
             {mkeygen : (trand -> tmkey)%etype}
             {mac : (tmkey * tmessage -> tmac)%etype}
             {mverify : (tmkey * tmessage * tmac -> tbool)%etype}
             {mac_correct :
-               @auth_conclusion tmessage tmac tmkey tmkey tunit
-                                mkeygen id_f unit_f mac mverify}.
+               @auth_conclusion tmac tmkey tmkey tunit
+                                mkeygen f_id funit mac mverify}.
 
     Context {tkey tnonce : type}
             {ekeygen : (trand -> tkey)%etype}
@@ -3220,8 +3234,7 @@ Section Language.
             (decrypt_encrypt : forall k n m,
                 eqwhp (decrypt@(ekeygen@($k), encrypt@(ekeygen@($k), n, m))) m)
             {confidentiality :
-               @confidentiality_conclusion tmessage tnat len
-                                           tkey tnonce
+               @confidentiality_conclusion tkey tnonce
                                            ekeygen encrypt}
             {erase_message : (tmessage -> tmessage)%etype}
             {erase_message_len :
@@ -3230,14 +3243,6 @@ Section Language.
     Local Notation encrypt_pair_nonces :=
       (fun k => @encrypt_pair_nonces tmessage tnat len tkey tnonce
                                      ekeygen encrypt k _).
-
-    Context {encode : forall t, (t -> tmessage)%etype}
-            {decode : forall t, (tmessage -> t)%etype}
-            {decode_encode : forall t (x : expr t),
-                eqwhp (decode t @ (encode t @ x)) x}.
-    Arguments encode {t}.
-    Arguments decode {t}.
-    Arguments decode_encode {t}.
 
     Definition E3_id := tbool. (* client id *)
 
@@ -3299,6 +3304,7 @@ Section Language.
     Local Notation "'require' a 'fail' b ; c" :=
       (eif a then c else b)%ewh
                             (right associativity,
+                             only parsing,
                              at level 100) : ewh_scope.
 
     Definition E3_client : expr_with_hole (E3_client_input * E3_state)
@@ -3355,9 +3361,6 @@ Section Language.
                 (ekeygen@($eK2), mkeygen@($mK2))),
                (#cnil, #cnil))).
 
-    Notation "a [ b ]" := (refine_hole b a)%ewh
-                                           (at level 10) : ewh_scope.
-
     Definition E3_step : expr_with_hole (E3_input * E3_state)
                                         (E3_output * E3_state) :=
       (
@@ -3376,19 +3379,6 @@ Section Language.
         )
       )%ewh.
 
-    Context (ffst_pair : forall t1 t2 (e1 : expr t1) (e2 : expr t2),
-                eqwhp (ffst@(e1, e2)) e1).
-    Context (fsnd_pair : forall t1 t2 (e1 : expr t1) (e2 : expr t2),
-                eqwhp (fsnd@(e1, e2)) e2).
-
-    Context (f_in : forall t, (t * (tlist t) -> tbool)%etype).
-    Arguments f_in {t}.
-    Context (f_in_nil : forall t x, eqwhp (f_in@(x, #(@cnil t)))
-                                          #vfalse)
-            (f_in_cons : forall t x y (l : expr (tlist t)),
-                eqwhp (f_in@(x, fcons@(y, l)))
-                      (x == y \/ f_in@(x, l))).
-
     Example example_3_authenticity n :
       (
         let e := interaction E3_init E3_step n in
@@ -3400,6 +3390,23 @@ Section Language.
                f_in@(x, input_log))
       )%expr.
     Proof.
+      induction n.
+      {
+        cbn; cbv [E3_init].
+        intros.
+        repeat (setoid_rewrite ffst_pair || setoid_rewrite fsnd_pair).
+        setoid_rewrite f_in_nil.
+        eapply whp_explosion.
+      }
+      { cbn [interaction].
+        generalize dependent (interaction E3_init E3_step n); intro e.
+        intros.
+        cbv [E3_step E3_server E3_client
+                     fill_alpha renumber renumber_h
+                     fill_hole refine_hole].
+        (* Resulting term is too large to do even a single
+           setoid_rewrite ffst_pair in reasonable time.
+           We need to exploit sharing in the term structure somehow. *)
     Abort.
   End Example3HonestKerberos.
 End Language.

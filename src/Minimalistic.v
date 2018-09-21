@@ -3400,6 +3400,13 @@ Section Language.
                f_in@(x, input_log))
       )%expr.
     Proof.
+      induction n; cbn.
+      intro.
+      repeat (rewrite_strat bottomup (choice ffst_pair fsnd_pair)).
+      eapply whp_impl_refl.
+      (* TOO SLOW, hasn't finished *)
+      repeat (rewrite_strat bottomup (choice ffst_pair fsnd_pair)).
+      setoid_rewrite snd_pair.
     Abort.
   End Example3HonestKerberos.
 End Language.

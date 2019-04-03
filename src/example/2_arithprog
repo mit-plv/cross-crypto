@@ -1,0 +1,6 @@
+a = (cnat 3)
+b = (cnat 4)
+c <- f_times (a, b)
+d <- f_add (a, b)
+e <- f_add (d, c)
+output tnat e

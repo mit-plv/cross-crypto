@@ -11,7 +11,7 @@ src/Util.v
 src/WithItreeWIP.v
 src/fmap.v
 src/grw.v
-src/grw_mon.v
+src/grw_cc.v
 src/natnat.v
 src/fmap/extensional.v
 src/fmap/list_of_pairs.v

@@ -1,0 +1,6 @@
+input tnat x
+input tnat y
+s <- f_add (x, y)
+p <- f_times (x, y)
+output tnat s
+output tnat p

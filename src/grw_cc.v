@@ -357,33 +357,35 @@ Section Test.
   Eval cbv in find_outputs ex_0_arith.
 
   Eval cbv in walk_tree_all map ex_0_arith ex_2_arithprog.
-  (* TODO:
-   * Semantics
-   * - interpretation under adversary
-   * - definition of join
-   * - proof of moving the input/output boundary
-   *   (possibly "trivially" by permitting
-        arbitrary adversary graph structure)
-   *
-   * Algorithm evaluation
-   * - subgraph rewriter
-   *)
+End Test.
 
-  (* Rewriter strategy
-   * similar to grw.  However we no longer have a single
-   * base node, so this will take some additional work.
-   * (Assume all nodes are reachable from the base?
-   *  Seems unworkable even if we just want multiple returns.)
-   * We can assume all nodes are reachable from some output.
-   *
-   * Strategy: guess the last output; match that; then guess the
-   * next-to-last output, etc.
-   *
-   * Another question - what's the reordering strategy?  And how to verify it?
-   * Thinking about verification requires having a definition of join,
-   * as well as some sort of notion of isomorphism
-   * - at least the theorem that isomorphism is preserved by the semantics
-   *
-   * Might be worth experimenting in a different language but we'll give
-   * it a try.
-   *)
+(* TODO:
+ * Semantics
+ * - interpretation under adversary
+ * - definition of join
+ * - proof of moving the input/output boundary
+ *   (possibly "trivially" by permitting
+        arbitrary adversary graph structure)
+ *
+ * Algorithm evaluation
+ * - subgraph rewriter
+ *)
+
+(* Rewriter strategy
+ * similar to grw.  However we no longer have a single
+ * base node, so this will take some additional work.
+ * (Assume all nodes are reachable from the base?
+ *  Seems unworkable even if we just want multiple returns.)
+ * We can assume all nodes are reachable from some output.
+ *
+ * Strategy: guess the last output; match that; then guess the
+ * next-to-last output, etc.
+ *
+ * Another question - what's the reordering strategy?  And how to verify it?
+ * Thinking about verification requires having a definition of join,
+ * as well as some sort of notion of isomorphism
+ * - at least the theorem that isomorphism is preserved by the semantics
+ *
+ * Might be worth experimenting in a different language but we'll give
+ * it a try.
+ *)

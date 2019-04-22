@@ -1,0 +1,41 @@
+skn1 <- $
+skn2 <- $
+Kn <- $
+sk1 <- ekeygen skn1
+sk2 <- mkeygen skn2
+sK <- skeygen Kn
+msK <- encode_tskey sK
+pK <- pkeygen sK
+nonce = (cnat N)
+enc_out <- encrypt (sk1, (nonce, msK))
+mac_out <- mac (sk2, enc_out)
+output tkey pK
+output tmsg enc_out
+output tmac mac_out
+
+input tmsg adv_out_enc
+input tmac adv_out_mac
+input tmsg adv_out_msg
+sk2_ <- f_id sk2
+check_out <- mverify (sk2_, (adv_out_enc, adv_out_mac))
+dec_msg <- decrypt (sk1, adv_out_enc)
+sK_ <- decode_tskey dec_msg
+sign_out <- sign (sK_, adv_out_msg)
+pK_ <- pkeygen sK_
+
+bad_pkey = czero_pkey
+output_pK_ <- f_ite (check_out, (pK_, bad_pkey))
+output tpkey output_pK_
+bad_sig = czero_sig
+output_sig <- f_ite (check_out, (sign_out, bad_sig))
+output tsig output_sig
+bad_msg = czero_msg
+output_msg <- f_ite (check_out, (adv_out_msg, bad_msg))
+output tmsg output_msg
+
+input tmsg adv_out_2_msg
+input tsig adv_out_2_sig
+verify_out <- sverify (pK, (adv_out_2_msg, adv_out_2_sig))
+msgs_match <- f_eq (adv_out_2_msg, adv_out_msg)
+good <- f_impl (verify_out, msgs_match)
+output tbool good

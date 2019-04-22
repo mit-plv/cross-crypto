@@ -143,24 +143,19 @@ Section Language.
       | None => n
       end.
 
+    Definition map_add_safe (k v : nat) (m : map) : map + error :=
+      match find k m with
+      | Some v' => if v =? v'
+                   then ok m
+                   else raise (E_msg "map_add_safe: mismatch")
+      | None => ok (add k v m)
+      end.
+
     Definition update_maps (lem2prog prog2lem : map) (li pi : nat)
       : map * map + error :=
-      match find li lem2prog with
-      | Some pi' => if pi =? pi'
-                    then ok (lem2prog, prog2lem)
-                    else raise (E_msg "update_maps: lem2prog mismatch")
-      | None =>
-        let lem2prog := add li pi lem2prog in
-        match find pi prog2lem with
-        | Some li' =>
-          if li =? li'
-          then ok (lem2prog, prog2lem)
-          else raise (E_msg "update_maps: prog2lem mismatch")
-        | None =>
-          let prog2lem := add pi li prog2lem in
-          ok (lem2prog, prog2lem)
-        end
-      end.
+      lem2prog' <-! map_add_safe li pi lem2prog;
+        prog2lem' <-! map_add_safe pi li prog2lem;
+        ok (lem2prog', prog2lem').
 
     Fixpoint update_maps_ref (loff poff : nat) (lem2prog prog2lem : map)
              (lr pr : ref) {struct lr} :
@@ -221,6 +216,13 @@ Section Language.
         end
       end.
 
+    Fixpoint filter_errors {t} (l : list (t + error)) : list t :=
+      match l with
+      | nil => nil
+      | cons (ok x) l' => cons x (filter_errors l')
+      | cons (raise _) l' => filter_errors l'
+      end.
+
     Fixpoint match_output' (loff poff : nat)
              (output_ref : ref) (lemma program : pgraph)
              (acc : list (map * map))
@@ -267,6 +269,25 @@ Section Language.
                   match_output loff output_ref lemma program)
                (find_outputs lemma).
 
+    Definition unify_map (m1 m2 : map) : map + error :=
+      fold_ac _ (fun k v me =>
+                   m <-! me;
+                     map_add_safe k v m) (inl m1) m2.
+
+    Definition unify_both (lp : (map * map) * (map * map)) : map * map + error :=
+      let '((lem2prog1, prog2lem1), (lem2prog2, prog2lem2)) := lp in
+      lem2prog <-! unify_map lem2prog1 lem2prog2;
+        prog2lem <-! unify_map prog2lem1 prog2lem2;
+        ok (lem2prog, prog2lem).
+
+    Eval cbv in (List.list_prod (1 :: 2 :: nil) (3 :: 4 :: 5 :: nil)).
+
+    Definition valid_maps (l : list (list (map * map))) : list (map * map) :=
+      List.fold_left
+        (fun l1 l2 =>
+           filter_errors (List.map unify_both (List.list_prod l1 l2)))
+        l (cons (empty, empty) nil).
+
   End Rewriter.
 
 End Language.
@@ -278,6 +299,12 @@ Section Test.
   | tnat : type
   | tbool : type
   | tunit : type
+  | tsig : type
+  | tpkey : type
+  | tkey : type
+  | tmsg : type
+  | tmac : type
+  | t_A : type
   | tprod : type -> type -> type.
 
   Fixpoint type_eqb (t1 t2 : type) : bool :=
@@ -285,6 +312,12 @@ Section Test.
     | tnat, tnat => true
     | tbool, tbool => true
     | tunit, tunit => true
+    | tsig, tsig => true
+    | tpkey, tpkey => true
+    | tkey, tkey => true
+    | tmsg, tmsg => true
+    | tmac, tmac => true
+    | t_A, t_A => true
     | tprod t1a t1b, tprod t2a t2b => (type_eqb t1a t2a) && (type_eqb t1b t2b)
     | _, _ => false
     end.
@@ -299,6 +332,9 @@ Section Test.
   | cunit : const
   | cnat : nat -> const
   | cbool : bool -> const
+  | czero_msg : const
+  | czero_sig : const
+  | czero_pkey : const
   | cprod : const -> const -> const.
 
   Fixpoint const_eqb (c1 c2 : const) : bool :=
@@ -306,6 +342,9 @@ Section Test.
     | cunit, cunit => true
     | cnat n1, cnat n2 => n1 ?= n2
     | cbool b1, cbool b2 => b1 ?= b2
+    | czero_msg, czero_msg => true
+    | czero_sig, czero_sig => true
+    | czero_pkey, czero_pkey => true
     | cprod c1a c1b, cprod c2a c2b => (const_eqb c1a c2a) && (const_eqb c1b c2b)
     | _, _ => false
     end.
@@ -320,7 +359,23 @@ Section Test.
   | f_add
   | f_times
   | f_not
-  | f_iszero.
+  | f_iszero
+  | f_eq
+  | f_impl
+  | f_ite
+  | f_id
+  | ekeygen
+  | mkeygen
+  | skeygen
+  | pkeygen
+  | encode_tskey
+  | decode_tskey
+  | encrypt
+  | decrypt
+  | mac
+  | mverify
+  | sign
+  | sverify.
 
   Definition func_eqb (f1 f2 : func) : bool :=
     match f1, f2 with
@@ -328,6 +383,22 @@ Section Test.
     | f_times, f_times => true
     | f_not, f_not => true
     | f_iszero, f_iszero => true
+    | f_eq, f_eq => true
+    | f_impl, f_impl => true
+    | f_ite, f_ite => true
+    | f_id, f_id => true
+    | ekeygen, ekeygen => true
+    | mkeygen, mkeygen => true
+    | skeygen, skeygen => true
+    | pkeygen, pkeygen => true
+    | encode_tskey, encode_tskey => true
+    | decode_tskey, decode_tskey => true
+    | encrypt, encrypt => true
+    | decrypt, decrypt => true
+    | mac, mac => true
+    | mverify, mverify => true
+    | sign, sign => true
+    | sverify, sverify => true
     | _, _ => false
     end.
   Lemma func_eqb_eq (f1 f2 : func) : func_eqb f1 f2 = true <-> f1 = f2.
@@ -336,7 +407,7 @@ Section Test.
 
   Notation pgraph := (@pgraph type const func).
 
-  Example ex_0_arith : pgraph :=
+  Example ex_0_arith_lhs : pgraph :=
     ((op_output tnat (ref_index 1))
        :: (op_output tnat (ref_index 1))
        :: (op_app f_times (ref_pair (ref_index 2) (ref_index 1)))
@@ -344,7 +415,7 @@ Section Test.
        :: (op_input tnat)
        :: (op_input tnat) :: nil).
 
-  Example ex_2_arithprog : pgraph :=
+  Example ex_0_arith_prog : pgraph :=
     ((op_output tnat (ref_index 0))
        :: (op_app f_add (ref_pair (ref_index 0) (ref_index 1)))
        :: (op_app f_add (ref_pair (ref_index 2) (ref_index 1)))
@@ -354,9 +425,71 @@ Section Test.
 
   Local Notation map := (list_of_pairs Nat.eqb).
 
-  Eval cbv in find_outputs ex_0_arith.
+  Eval cbv in find_outputs ex_0_arith_lhs.
 
-  Eval cbv in walk_tree_all map ex_0_arith ex_2_arithprog.
+  Eval cbv in walk_tree_all map ex_0_arith_lhs ex_0_arith_prog.
+
+  Time Eval cbv in (valid_maps map (walk_tree_all map ex_0_arith_lhs ex_0_arith_prog)).
+
+  Example ex_1_authconf_prog N : pgraph :=
+    ((op_output tbool (ref_index 0))
+       :: (op_app f_impl (ref_pair (ref_index 1) (ref_index 0)))
+       :: (op_app f_eq (ref_pair (ref_index 2) (ref_index 18)))
+       :: (op_app sverify (ref_pair (ref_index 26) (ref_pair (ref_index 1) (ref_index 0))))
+       :: (op_input tsig)
+       :: (op_input tmsg)
+       :: (op_output tmsg (ref_index 0))
+       :: (op_app f_ite (ref_pair (ref_index 11) (ref_pair (ref_index 13) (ref_index 0))))
+       :: (op_const czero_msg)
+       :: (op_output tsig (ref_index 0))
+       :: (op_app f_ite (ref_pair (ref_index 8) (ref_pair (ref_index 5) (ref_index 0))))
+       :: (op_const czero_sig)
+       :: (op_output tpkey (ref_index 0))
+       :: (op_app f_ite (ref_pair (ref_index 5) (ref_pair (ref_index 1) (ref_index 0))))
+       :: (op_const czero_pkey)
+       :: (op_app pkeygen (ref_index 1))
+       :: (op_app sign (ref_pair (ref_index 0) (ref_index 4)))
+       :: (op_app decode_tskey (ref_index 0))
+       :: (op_app decrypt (ref_pair (ref_index 15) (ref_index 4)))
+       :: (op_app mverify (ref_pair (ref_index 0) (ref_pair (ref_index 3) (ref_index 2))))
+       :: (op_app f_id (ref_index 12))
+       :: (op_input tmsg)
+       :: (op_input tmac)
+       :: (op_input tmsg)
+       :: (op_output tmac (ref_index 2))
+       :: (op_output tmsg (ref_index 2))
+       :: (op_output tkey (ref_index 3))
+       :: (op_app mac (ref_pair (ref_index 5) (ref_index 0)))
+       :: (op_app encrypt (ref_pair (ref_index 5) (ref_pair (ref_index 0) (ref_index 2))))
+       :: (op_const (cnat N))
+       :: (op_app pkeygen (ref_index 1))
+       :: (op_app encode_tskey (ref_index 0))
+       :: (op_app skeygen (ref_index 2))
+       :: (op_app mkeygen (ref_index 2))
+       :: (op_app ekeygen (ref_index 2))
+       :: op_rand
+       :: op_rand
+       :: op_rand :: nil).
+
+  Example ex_1_authconf_lhs : pgraph :=
+    ((op_output t_A (ref_index 0))
+       :: (op_app f_ite (ref_pair (ref_index 2) (ref_pair (ref_index 1) (ref_index 0))))
+       :: (op_input t_A)
+       :: (op_input t_A)
+       :: (op_app mverify (ref_pair (ref_index 5) (ref_pair (ref_index 1) (ref_index 0))))
+       :: (op_input tmac)
+       :: (op_input tmsg)
+       :: (op_output tmac (ref_index 0))
+       :: (op_app mac (ref_pair (ref_index 2) (ref_index 0)))
+       :: (op_input tmsg)
+       :: (op_app f_id (ref_index 0))
+       :: (op_app mkeygen (ref_index 0))
+       :: op_rand :: nil).
+
+  Eval cbv in walk_tree_all map ex_1_authconf_lhs (ex_1_authconf_prog 5).
+
+  Eval cbv in valid_maps map (walk_tree_all map ex_1_authconf_lhs (ex_1_authconf_prog 5)).
+
 End Test.
 
 (* TODO:

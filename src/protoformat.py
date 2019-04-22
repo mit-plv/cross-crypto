@@ -13,8 +13,8 @@ def main():
     with open(args.file) as f:
         program = []
         bindings = {}
-        for (i, l) in enumerate(f):
-            l = l.strip().split(maxsplit=2)
+        for (i, l) in enumerate(l.strip() for l in f if l.strip()):
+            l = l.split(maxsplit=2)
 
             if l[0] == 'input':
                 bindings[l[2]] = i

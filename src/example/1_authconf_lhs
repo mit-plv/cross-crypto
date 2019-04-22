@@ -1,0 +1,15 @@
+skr <- $
+sk <- mkeygen skr
+vk <- f_id sk
+
+input tmsg msg1
+tag1 <- mac (sk, msg1)
+output tmac tag1
+
+input tmsg msg2
+input tmac tag2
+ve <- mverify (vk, (msg2, tag2))
+input t_A x1
+input t_A x2
+x <- f_ite (ve, (x1, x2))
+output t_A x

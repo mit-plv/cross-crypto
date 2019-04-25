@@ -123,6 +123,13 @@ Section Language.
     Local Notation find := (map_ops.(fmap.find)).
     Local Notation fold_ac := (map_ops.(fmap.fold_ac)).
 
+    Context (map_bool_ops : CrossCrypto.fmap.operations nat bool).
+    Local Notation map_b := (map_bool_ops.(fmap.M)).
+    Local Notation empty_b := (map_bool_ops.(fmap.empty)).
+    Local Notation add_b := (map_bool_ops.(fmap.add)).
+    Local Notation find_b := (map_bool_ops.(fmap.find)).
+    Local Notation fold_ac_b := (map_bool_ops.(fmap.fold_ac)).
+
     Fixpoint renumber_ref (f : nat -> nat) (r : ref) : ref :=
       match r with
       | ref_index n => ref_index (f n)
@@ -280,13 +287,107 @@ Section Language.
         prog2lem <-! unify_map prog2lem1 prog2lem2;
         ok (lem2prog, prog2lem).
 
-    Eval cbv in (List.list_prod (1 :: 2 :: nil) (3 :: 4 :: 5 :: nil)).
-
-    Definition valid_maps (l : list (list (map * map))) : list (map * map) :=
+    Definition compatible_maps (l : list (list (map * map))) : list (map * map) :=
       List.fold_left
         (fun l1 l2 =>
            filter_errors (List.map unify_both (List.list_prod l1 l2)))
         l (cons (empty, empty) nil).
+
+    Definition find_err x (m : map) :=
+      match find x m with
+      | None => raise (E_msg "find_err: not present")
+      | Some y => ok y
+      end.
+    Definition find_b_err x (m : map_b) :=
+      match find_b x m with
+      | None => raise (E_msg "find_err: not present")
+      | Some y => ok y
+      end.
+
+    Fixpoint check_ordering' (lem2prog : map) (lemma : pgraph) (i highestI highestO : nat) : unit + error :=
+      match lemma with
+      | nil => ok tt
+      | o :: lemma =>
+        '(highestI, highestO) <-!
+         match o with
+         | op_input _ => j <-! find_err i lem2prog;
+                           if j <? highestO
+                           then raise (E_msg "check_ordering: disorder")
+                           else ok (max j highestI, highestO)
+         | op_output _ _ => j <-! find_err i lem2prog;
+                              if j <? highestI
+                              then raise (E_msg "check_ordering: disorder")
+                              else ok (highestI, max j highestO)
+         | _ => ok (highestI, highestO)
+         end;
+          check_ordering' lem2prog lemma (S i) highestI highestO
+      end.
+
+    Definition check_ordering (lem2prog : map) (lemma : pgraph) : unit + error :=
+      check_ordering' lem2prog lemma 0 0 0.
+
+    Fixpoint find_pure_ops' (rlemma : list op)
+             (loff : nat) (l2pure : map_b) {struct rlemma} : map_b + error :=
+      match rlemma with
+      | nil => ok l2pure
+      | l_op :: rlemma =>
+        pure <-!
+             match l_op with
+             | op_const _
+             | op_input _ => ok true
+             | op_rand => ok false
+             | op_app _ r
+             | op_output _ r =>
+               (fix ref_pure r :=
+                  match r with
+                  | ref_index n => find_b_err (n + loff) l2pure
+                  | ref_pair r1 r2 =>
+                    s1 <-! ref_pure r1;
+                      s2 <-! ref_pure r2;
+                      ok (s1 && s2)
+                  end) r
+             end;
+          let loff := Nat.pred loff in
+          find_pure_ops' rlemma loff (add_b loff pure l2pure)
+      end.
+
+    Definition find_pure_ops (lemma : pgraph) : map_b + error :=
+      find_pure_ops' (List.rev lemma) (List.length lemma) empty_b.
+
+    Fixpoint check_leaks_are_pure' (prog : pgraph) (poff : nat)
+             (prog2lem : map) (l2pure : map_b) : unit + error :=
+      match prog with
+      | nil => ok tt
+      | p_op :: prog =>
+        _ <-! match find poff prog2lem with
+              | Some _ => ok tt
+              | _ =>
+                match p_op with
+                | op_app _ r
+                | op_output _ r =>
+                  (fix check_ref r :=
+                     match r with
+                     | ref_index n =>
+                       match find (n + S poff) prog2lem with
+                       | Some loff =>
+                         pure <-! find_b_err loff l2pure;
+                           if pure
+                           then ok tt
+                           else raise (E_msg "unpure leak")
+                       | None => ok tt
+                       end
+                     | ref_pair r1 r2 =>
+                       _ <-! check_ref r1; check_ref r2
+                     end) r
+                | _ => ok tt
+                end
+              end;
+          check_leaks_are_pure' prog (S poff) prog2lem l2pure
+      end.
+
+    Definition check_leaks_are_pure (prog : pgraph)
+               (prog2lem : map) (l2pure : map_b) : unit + error :=
+      check_leaks_are_pure' prog 0 prog2lem l2pure.
 
   End Rewriter.
 
@@ -429,7 +530,7 @@ Section Test.
 
   Eval cbv in walk_tree_all map ex_0_arith_lhs ex_0_arith_prog.
 
-  Time Eval cbv in (valid_maps map (walk_tree_all map ex_0_arith_lhs ex_0_arith_prog)).
+  Time Eval cbv in (compatible_maps map (walk_tree_all map ex_0_arith_lhs ex_0_arith_prog)).
 
   Example ex_1_authconf_prog N : pgraph :=
     ((op_output tbool (ref_index 0))
@@ -488,7 +589,7 @@ Section Test.
 
   Eval cbv in walk_tree_all map ex_1_authconf_lhs (ex_1_authconf_prog 5).
 
-  Eval cbv in valid_maps map (walk_tree_all map ex_1_authconf_lhs (ex_1_authconf_prog 5)).
+  Eval cbv in compatible_maps map (walk_tree_all map ex_1_authconf_lhs (ex_1_authconf_prog 5)).
 
 End Test.
 

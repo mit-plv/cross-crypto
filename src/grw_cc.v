@@ -10,6 +10,8 @@ Require Import Omega.
 
 Require Import FCF.EqDec.
 
+Import EqNotations.
+
 Require Import CrossCrypto.NatUtil.
 Require CrossCrypto.fmap.
 
@@ -92,6 +94,121 @@ Section Language.
   | op_output : type -> ref -> op.
 
   Definition pgraph : Set := list op.
+
+  Section Semantics.
+    Context {const_type : const -> type}
+            {dom cod : func -> type}.
+    Context {interp_type : type -> Set}
+            {interp_type_inhabited : forall t, interp_type t}
+            {interp_const : forall c, interp_type (const_type c)}
+            {interp_func : forall f,
+                interp_type (dom f) -> interp_type (cod f)}
+            {mkprod : forall t1 t2,
+                interp_type t1 -> interp_type t2 -> interp_type (tprod t1 t2)}.
+
+    Arguments interp_type_inhabited {t}.
+    Arguments mkprod {t1 t2}.
+
+    Definition op_type o : type :=
+      match o with
+      | op_const c => const_type c
+      | op_rand => trand
+      | op_app f _ => cod f
+      | op_input t => tunit
+      | op_output t _ => tunit
+      end.
+
+    Definition prog_types : pgraph -> list type :=
+      List.map op_type.
+
+    Definition ctxt_type : list type -> Set :=
+      List.fold_right (fun t (T : Set) => interp_type t * T)%type unit.
+
+    Definition transport {t : type} (x : interp_type t) (u : type) :
+      option (interp_type u) :=
+      match EqDec_dec _ t u with
+      | left e => Some (rew e in x)
+      | right _ => None
+      end.
+
+    Definition recover {t : type} (o : option (interp_type t)) : interp_type t :=
+      match o with
+      | Some y => y
+      | None => interp_type_inhabited
+      end.
+
+    Definition cast {t : type} (x : interp_type t) (u : type) : interp_type u := recover (transport x u).
+
+    Fixpoint ctxt_nth {ctxt : list type} (ctx : ctxt_type ctxt) (n : nat) : option {t : type & interp_type t} :=
+      match ctxt as ctxt' return (ctxt_type ctxt' -> _) with
+      | nil => fun _ => None
+      | cons _ ctxt =>
+        fun '(x, ctx) =>
+          match n with
+          | 0 => Some (existT _ _ x)
+          | S n => ctxt_nth ctx n
+          end
+      end ctx.
+
+    Fixpoint ctxt_nth_trans {ctxt : list type} (ctx : ctxt_type ctxt) (n : nat) (t : type) {struct ctxt} : option (interp_type t) :=
+      match ctxt as ctxt' return (ctxt_type ctxt' -> _) with
+      | nil => fun _ => None
+      | cons _ ctxt =>
+        fun '(x, ctx) =>
+          match n with
+          | 0 => transport x t
+          | S n => ctxt_nth_trans ctx n t
+          end
+      end ctx.
+
+    Fixpoint interp_ref {ctxt : list type} (ctx : ctxt_type ctxt) (r : ref) : option {t & interp_type t} :=
+      match r with
+      | ref_index n => ctxt_nth ctx n
+      | ref_pair r1 r2 =>
+        match interp_ref ctx r1 with
+        | None => None
+        | Some (existT _ _ x1) =>
+          match interp_ref ctx r2 with
+          | None => None
+          | Some (existT _ _ x2) => Some (existT _ _ (mkprod x1 x2))
+          end
+        end
+      end.
+
+    Definition interp_ref_cast {ctxt : list type} (ctx : ctxt_type ctxt) (r : ref) (t : type) : interp_type t :=
+      recover match interp_ref ctx r with
+              | Some (existT _ _ x) => transport x t
+              | None => None
+              end.
+
+    Definition interp_op (rands : list (interp_type trand))
+               (o : op) {ctxt : list type} (ctx : ctxt_type ctxt)
+      : (interp_type (op_type o) * list (interp_type trand)) :=
+      match o with
+      | op_const c => (interp_const c, rands)
+      | op_rand =>
+        match rands with
+        | nil => (interp_type_inhabited, nil)
+        | cons r rands => (r, rands)
+        end
+      | op_app f r => (interp_func f (interp_ref_cast ctx r (dom f)), rands)
+      | _ => (interp_type_inhabited, rands)
+      end.
+
+    (* Semantics of a well-formed graph
+       (no inputs or outputs, all refs and types match up).
+       You must pass in enough randomness (at least 1 for every op_rand).
+     *)
+    Fixpoint interpret (rands : list (interp_type trand))
+             (p : pgraph) {struct p} : ctxt_type (prog_types p) * list (interp_type trand) :=
+      match p with
+      | nil => (tt, rands)
+      | cons o p =>
+        let '(ctx, rands) := interpret rands p in
+        let '(x, rands) := interp_op rands o ctx in
+        ((x, ctx), rands)
+      end.
+  End Semantics.
 
   Section Rewriter.
     Inductive error :=

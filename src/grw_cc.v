@@ -114,12 +114,55 @@ Section Language.
       | op_const c => const_type c
       | op_rand => trand
       | op_app f _ => cod f
-      | op_input t => tunit
+      | op_input t => t
       | op_output t _ => tunit
       end.
 
     Definition prog_types : pgraph -> list type :=
       List.map op_type.
+
+    Fixpoint ref_type (ctxt : list type) (r : ref) : option type :=
+      match r with
+      | ref_index n => List.nth_error ctxt n
+      | ref_pair r1 r2 =>
+        match ref_type ctxt r1 with
+        | None => None
+        | Some t1 =>
+          match ref_type ctxt r2 with
+          | None => None
+          | Some t2 => Some (t1 * t2)%etype
+          end
+        end
+      end.
+
+    Definition check_op (ctxt : list type) (o : op) : bool :=
+      match o with
+      | op_app f r =>
+        match ref_type ctxt r with
+        | None => false
+        | Some t => t ?= dom f
+        end
+      | op_output t' r =>
+        match ref_type ctxt r with
+        | None => false
+        | Some t => t ?= t'
+        end
+      | _ => true
+      end.
+
+    Definition check_prog (p : pgraph) : bool :=
+      match List.fold_right
+              (fun o ctxt' =>
+                 match ctxt' with
+                 | None => None
+                 | Some ctxt =>
+                   if check_op ctxt o
+                   then Some (op_type o :: ctxt)
+                   else None
+                 end) (Some nil) p with
+      | None => false
+      | Some _ => true
+      end.
 
     Definition ctxt_type : list type -> Set :=
       List.fold_right (fun t (T : Set) => interp_type t * T)%type unit.

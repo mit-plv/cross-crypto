@@ -1,5 +1,5 @@
+Set Universe Polymorphism.
 Section Maps.
-  Local Set Universe Polymorphism.
   Context {K V : Type}.
 
   Record operations :=
@@ -78,5 +78,5 @@ Section Maps.
       }.
   End Spec.
 End Maps.
-
+Unset Universe Polymorphism.
 Global Arguments operations : clear implicits.

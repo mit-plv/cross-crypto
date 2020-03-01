@@ -197,7 +197,7 @@ Module ddist.
       induction l as [|a l]; [solve[constructor]|].
       destruct a; cbn in *.
       { constructor. constructor. assumption. }
-      { constructor. firstorder. assumption. } }
+      { constructor. discriminate. assumption. } }
   Qed.
 
   Lemma bind_ret_r {A B} a f : @bind A B a (fun a => ret (f a)) = map f a.

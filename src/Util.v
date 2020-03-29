@@ -14,7 +14,6 @@ Lemma list_vector_split a b (T : Set) (x : Vector.t T _) : skipn (b) (Vector.to_
   rewrite Heqp in IHb.
   simpl in *.
   rewrite <- IHb.
-  SearchAbout Vector.hd Vector.tl.
   rewrite (Vector.eta x).
   reflexivity.
 Qed.

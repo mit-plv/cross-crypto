@@ -7,7 +7,7 @@ Global Instance Proper_negligible :
   Proper (pointwise_relation nat eqRat ==> iff) negligible.
 Proof.
   cbv [pointwise_relation Proper respectful].
-  split; eauto 10 using negligible_eq, (@symmetry _ eqRat _).
+  split; pose (@symmetry _ eqRat _); eauto 10 using negligible_eq.
 Qed.
 
 Global Instance Proper_negligible_le :

@@ -4,7 +4,7 @@ Require Import Coq.Classes.Morphisms.
 Require Import Coq.Logic.Eqdep_dec.
 Require Import Coq.Strings.String.
 Require Import Coq.derive.Derive.
-Require Import Omega.
+Require Import ZArith Lia.
 
 Require Import Coq.Lists.List.
 
@@ -63,7 +63,7 @@ Ltac crush_deciders' t :=
           | _ => cbn [andb orb negb] in *
           | _ => intuition idtac
           | _ => congruence
-          | _ => omega
+          | _ => lia
           | _ => t
           end).
 
@@ -681,7 +681,7 @@ Section Language.
   Proof.
     revert n; induction p1; intros n; cbn [bindings_ref length plus app].
     - intuition idtac.
-    - replace (S (length p1 + n)) with (length p1 + S n) by omega.
+    - replace (S (length p1 + n)) with (length p1 + S n) by lia.
       setoid_rewrite IHp1; intuition idtac.
   Qed.
 
@@ -736,9 +736,9 @@ Section Language.
     crush_deciders idtac.
     subst.
     match goal with
-    | _ : (_ + _ + ?x) = (_ + (_ + ?y)) |- _ => assert (x = y) by omega
+    | _ : (_ + _ + ?x) = (_ + (_ + ?y)) |- _ => assert (x = y) by lia
     end.
-    subst; omega.
+    subst; lia.
   Qed.
 
   Lemma renumber_expr'_renumber_bindings acc f p o' :
@@ -757,7 +757,7 @@ Section Language.
       eapply renumber_op_ext.
       intros;
         rewrite <-offset_renumbering_plus;
-        f_equal; omega.
+        f_equal; lia.
   Qed.
 
   Lemma renumber_expr_renumber_bindings f p o' :
@@ -940,7 +940,7 @@ Section Language.
     intros ?????.
     eapply interp_renumbered_op; eauto.
     listrew.
-    replace (S (length p)) with (1 + length p) in * by omega.
+    replace (S (length p)) with (1 + length p) in * by lia.
     eapply (continuation_renumbered_ext
               _ _ _ _ _
               ltac:(intros; eapply offset_renumbering_plus)) in Hkk'; eauto.
@@ -1098,7 +1098,7 @@ Section Language.
       erewrite offset_renumbering_ext by eapply Hh.
       cbv [offset_renumbering]; crush_deciders idtac.
       match goal with
-      | H : ?a + ?b = ?a + ?c |- _ => assert (b = c) by omega
+      | H : ?a + ?b = ?a + ?c |- _ => assert (b = c) by lia
       end;
         subst; eauto.
   Qed.
@@ -1156,8 +1156,8 @@ Section Language.
   Proof.
     cbv [offset_renumbering]; crush_deciders subst.
     match goal with
-    | |- context[?a + ?b - ?a] => replace (a + b - a) with b by omega
-    end; omega.
+    | |- context[?a + ?b - ?a] => replace (a + b - a) with b by lia
+    end; lia.
   Qed.
 
   Lemma expr_refs_renumber f e j :
@@ -1179,7 +1179,7 @@ Section Language.
         eexists; intuition eauto.
         match goal with
         | |- context[?a + (?b - ?a)] =>
-          replace (a + (b - a)) with b by omega
+          replace (a + (b - a)) with b by lia
         end; eauto.
     - intros (?&?&[?|?]); eauto.
       right.
@@ -1187,7 +1187,7 @@ Section Language.
       cbv [offset_renumbering].
       crush_deciders (idtac; match goal with
                              | H : ?a + ?x = ?a + ?y |- _ =>
-                               assert (x = y) by omega; subst
+                               assert (x = y) by lia; subst
                              end).
   Qed.
 
@@ -1273,7 +1273,7 @@ Section Language.
 
       replace (renumber_op (plus (S (length p))) o) with
           (renumber_op (plus (length p)) (renumber_op S o)) by
-          (erewrite <-renumber_renumber_op; eauto; intros; omega).
+          (erewrite <-renumber_renumber_op; eauto; intros; lia).
       erewrite <-renumber_renumber_bindings by (intros; reflexivity).
       rewrite renumber_bindings_ext_relevant with
           (f' := (offset_renumbering 1 pred)); try reflexivity.
@@ -1477,11 +1477,11 @@ Section Language.
         intros Hk m.
     { reflexivity. }
     listrew.
-    specialize (IHp (ltac:(intros; eapply Hk; omega))
+    specialize (IHp (ltac:(intros; eapply Hk; lia))
                     (fun _ ctx =>
                        Mbind (interp_op_silent _ ctx o)
                              (fun x => m (_ * _)%etype (x, ctx)))).
-    specialize (Hk (length p) ltac:(omega)).
+    specialize (Hk (length p) ltac:(lia)).
     repeat rewrite interp_bindings_app; cbn [interp_bindings].
     etransitivity; [|etransitivity]; [|eapply IHp|]; clear IHp;
       [|solve [crush_Mequiv]].
@@ -1548,7 +1548,7 @@ Section Language.
                     multimatch goal with
                     | |- context[f ?x] => specialize (Hf x); destruct (f x)
                     | _ => change (1 + ?y) with (S y)
-                    | H : ?x < 1 |- _ => assert (x = 0) by omega; clear H
+                    | H : ?x < 1 |- _ => assert (x = 0) by lia; clear H
                     | _ => cbn [lookup]
                     | _ => subst
                     end).
@@ -1686,9 +1686,9 @@ Section Language.
     subst.
     match goal with
     | H : ?x + ?y + ?z = ?x + (?y + ?z') |- _ =>
-      assert (z = z') by omega; clear H; subst
+      assert (z = z') by lia; clear H; subst
     end.
-    destruct (f _); f_equal; omega.
+    destruct (f _); f_equal; lia.
   Qed.
 
   Lemma interp_omitted_bindings f p
@@ -1813,7 +1813,7 @@ Section Language.
       (shift_expr_continuation e t total j).
   Proof.
     cbv [shift_expr_continuation]; intros ? He.
-    replace (S (total - j)) with (S (S (total - S j))) by omega.
+    replace (S (total - j)) with (S (S (total - S j))) by lia.
     erewrite (renumber_expr_ext
                 _ _ _ ltac:(eapply (shift_S (S (total - S j))))).
     rewrite renumber_renumber_expr with
@@ -1885,11 +1885,11 @@ Section Language.
     erewrite (renumber_expr_ext_relevant
                 _ _ _ ltac:(intros; rewrite offset_1_shift; eauto)).
     cbv [shift_expr_continuation].
-    repeat (evar (x : nat); subst x; replace (?x - 0) with (?x) by omega).
+    repeat (evar (x : nat); subst x; replace (?x - 0) with (?x) by lia).
     erewrite <-renumber_renumber_expr.
     - reflexivity.
     - intros.
-      rewrite shift_shift; omega.
+      rewrite shift_shift; lia.
   Qed.
 
   Lemma omit_range_shift n n' e :
@@ -1937,7 +1937,7 @@ Section Language.
               intros; eapply shift_continuation_omitted; eauto]
        |]; cycle 1;
         [|cbv [shift_expr_continuation interp_expr_cast interp_expr];
-          replace (length _ - length _) with 0 by omega;
+          replace (length _ - length _) with 0 by lia;
           erewrite renumber_expr_ext by (eapply shift_trivial);
           rewrite renumber_id_expr;
           crush_Mequiv ..].
@@ -2161,7 +2161,7 @@ Section Language.
         crush_deciders idtac.
         eapply IHn.
         eapply Forall_cons; eauto.
-        omega.
+        lia.
       Qed.
 
       Lemma generate_cycles_correct lem2prog n :
@@ -2459,10 +2459,10 @@ Section Language.
                  (renumber_bindings_ext _ _ _
                                         ltac:(eapply offset_cycle)).
           cbn [plus].
-          replace (from - to + to) with from by omega.
-          replace (from - to + S to) with (S from) by omega.
-          replace (from + 1) with (S from) by omega.
-          replace (to + 1) with (S to) by omega.
+          replace (from - to + to) with from by lia.
+          replace (from - to + S to) with (S from) by lia.
+          replace (from + 1) with (S from) by lia.
+          replace (to + 1) with (S to) by lia.
           crush_Mequiv.
           rewrite length_renumber.
           repeat erewrite
@@ -2470,9 +2470,9 @@ Section Language.
                                   ltac:(eapply offset_cycle)).
           cbn [plus].
           replace (from - to + S (to + length ptail))
-            with (from + S (length ptail)) by omega.
+            with (from + S (length ptail)) by lia.
           replace (to + S (length ptail))
-            with (S (to + length ptail)) by omega.
+            with (S (to + length ptail)) by lia.
           crush_Mequiv.
       Qed.
 
@@ -2547,7 +2547,7 @@ Section Language.
           intros.
           rewrite <-offset_renumbering_plus.
           f_equal.
-          omega.
+          lia.
       Qed.
     End WithMap.
   End Rewriter.

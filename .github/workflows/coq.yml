@@ -1,0 +1,33 @@
+name: CI (Coq)
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+
+    strategy:
+      matrix:
+        env:
+        - { COQ_VERSION: "master", COQ_PACKAGE: "coq"       , PPA: "ppa:jgross-h/coq-master-daily"            , os: "ubuntu-latest"            }
+        - { COQ_VERSION: "v8.13" , COQ_PACKAGE: "coq"       , PPA: "ppa:jgross-h/coq-8.13-daily"              , os: "ubuntu-latest" }
+        - { COQ_VERSION: "v8.12" , COQ_PACKAGE: "coq"       , PPA: "ppa:jgross-h/coq-8.12-daily"              , os: "ubuntu-latest" }
+        - { COQ_VERSION: "v8.11" , COQ_PACKAGE: "coq"       , PPA: "ppa:jgross-h/coq-8.11-daily"              , os: "ubuntu-latest" }
+        - { COQ_VERSION: "v8.10" , COQ_PACKAGE: "coq"       , PPA: "ppa:jgross-h/coq-8.10-daily"              , os: "ubuntu-latest" }
+        - { COQ_VERSION: "v8.9"  , COQ_PACKAGE: "coq"       , PPA: "ppa:jgross-h/coq-8.9-daily"               , os: "ubuntu-18.04" }
+        - { COQ_VERSION: "v8.8"  , COQ_PACKAGE: "coq"       , PPA: "ppa:jgross-h/coq-8.8-daily"               , os: "ubuntu-18.04" }
+
+    env: ${{ matrix.env }}
+    runs-on: ${{ matrix.env.os }}
+
+    steps:
+    - name: install Coq
+      run: |
+        if [ ! -z "$PPA" ]; then sudo add-apt-repository "$PPA" -y; fi
+        sudo apt-get -o Acquire::Retries=30 update -q
+        sudo apt-get -o Acquire::Retries=30 install $COQ_PACKAGE -y --allow-unauthenticated
+    - uses: actions/checkout@v2
+    - name: submodules-init
+      uses: snickerbockers/submodules-init@v4
+    - run: make TIMED=1 -j2

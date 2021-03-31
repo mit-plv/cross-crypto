@@ -1,4 +1,4 @@
-Require Import Omega.
+Require Import ZArith Lia.
 
 Fixpoint decode (n : nat) : nat * nat :=
   match n with
@@ -30,21 +30,21 @@ Proof.
   enough (forall s b, b <= s -> decode (encode_sum s b) = (s - b, b)) as H.
   { intros.
     specialize (H (a + b) b).
-    replace (a + b - b) with a in H by omega.
-    apply H; omega.  }
+    replace (a + b - b) with a in H by lia.
+    apply H; lia.  }
   intros s.
   induction s; intros.
-  { replace b with 0 by omega.
+  { replace b with 0 by lia.
     cbn [encode_sum decode].
     reflexivity. }
   { induction b.
     { cbn [encode_sum decode].
-      rewrite IHs by omega.
-      replace (s - s) with 0 by omega.
+      rewrite IHs by lia.
+      replace (s - s) with 0 by lia.
       reflexivity. }
     { cbn [encode_sum decode] in IHb |- *.
-      rewrite IHb by omega.
-      replace (S s - b) with (S (S s - S b)) by omega.
+      rewrite IHb by lia.
+      replace (S s - b) with (S (S s - S b)) by lia.
       reflexivity. } }
 Qed.
 
@@ -57,11 +57,11 @@ Proof.
     destruct (decode n) as [a b].
     destruct a.
     { cbn [plus] in IHn.
-      replace (S b + 0) with (S b) by omega.
+      replace (S b + 0) with (S b) by lia.
       cbn [encode_sum].
-      omega. }
-    { replace (S a + b) with (S (a + b)) in IHn by omega.
-      replace (a + S b) with (S (a + b)) by omega.
+      lia. }
+    { replace (S a + b) with (S (a + b)) in IHn by lia.
+      replace (a + S b) with (S (a + b)) by lia.
       cbn [encode_sum] in IHn |- *.
-      omega. } }
+      lia. } }
 Qed.

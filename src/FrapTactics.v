@@ -1,4 +1,4 @@
-Require Import Eqdep String Arith Omega Program Relations Bool.
+Require Import Eqdep String Arith ZArith Program Relations Bool Lia.
 Require Import List.
 Open Scope string_scope.
 Open Scope list_scope.
@@ -62,7 +62,7 @@ Ltac linear_arithmetic := intros;
            | [ _ : context[min ?a ?b] |- _ ] =>
              let Heq := fresh "Heq" in destruct (Min.min_spec a b) as [[? Heq] | [? Heq]];
                rewrite Heq in *; clear Heq
-           end; omega.
+           end; lia.
 
 Ltac equality := intuition congruence.
 
@@ -100,8 +100,8 @@ Inductive ordering (n m : nat) :=
 | Gt (_ : n > m).
 
 Local Hint Constructors ordering.
-Local Hint Extern 1 (_ < _) => omega.
-Local Hint Extern 1 (_ > _) => omega.
+Local Hint Extern 1 (_ < _) => lia.
+Local Hint Extern 1 (_ > _) => lia.
 
 Theorem totally_ordered : forall n m, ordering n m.
 Proof.

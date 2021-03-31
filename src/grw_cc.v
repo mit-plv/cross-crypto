@@ -6,7 +6,7 @@ Require Import Coq.Arith.PeanoNat.
 Require Import Coq.Strings.String.
 Require Import Coq.Lists.List.
 Require Import Coq.Bool.Bool.
-Require Import Omega.
+Require Import ZArith Lia.
 
 Require Import FCF.EqDec.
 
@@ -61,7 +61,7 @@ Ltac crush_deciders' t :=
           | _ => cbn [andb orb negb] in *
           | _ => intuition idtac
           | _ => congruence
-          | _ => omega
+          | _ => lia
           | _ => t
           end).
 

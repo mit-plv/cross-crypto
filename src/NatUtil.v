@@ -1,4 +1,4 @@
-Require Import Omega.
+Require Import Lia.
 
 Fixpoint optsub (n m : nat) {struct m} : option nat :=
   match m with
@@ -18,7 +18,7 @@ Lemma optsub_plus a b :
   end.
 Proof.
   revert a; induction b; intros a; cbn [optsub plus]; eauto.
-  destruct a; try omega.
+  destruct a; try lia.
   specialize (IHb a).
-  destruct (a -? b); omega.
+  destruct (a -? b); lia.
 Qed.

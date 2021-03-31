@@ -3,6 +3,7 @@ Require Import Coq.Classes.Morphisms.
 Require Import Coq.MSets.MSetPositive Coq.FSets.FMapPositive.
 Require Import FCF.FCF FCF.Asymptotic FCF.EqDec.
 Require Import CrossCrypto.Util CrossCrypto.RatUtil CrossCrypto.RewriteUtil CrossCrypto.MapUtil.
+Require Import Coq.ZArith.ZArith.
 Require Import Lia. (* TODO: remove after removing not_negligible_const *)
 Require Import Coq.Init.Wf.
 Require Import Coq.Relations.Relations.
@@ -1822,7 +1823,7 @@ Section Language.
       end; solve [ contradiction | nia ].
     }
     intros H; cbv [negligible] in *; specialize (H 1%nat); destruct H as [n0 H].
-    eapply (H (den + n0)%nat ltac:(constructor; omega) ltac:(omega)); clear H.
+    eapply (H (den + n0)%nat ltac:(constructor; lia) ltac:(lia)); clear H.
     cbv [leRat bleRat ratCD]; simpl.
     match goal with |- context [le_gt_dec ?a ?b] =>
                     destruct (le_gt_dec a b)
@@ -2305,7 +2306,7 @@ Section Language.
   Lemma pos_pair_old_conv n m x : n > m -> index_old m (pos_pair (n, x)) -> False.
   Proof.
     cbv [index_old]; rewrite pos_pair_inv_r.
-    omega.
+    lia.
   Qed.
 
   Lemma old_different i n x : index_old n i -> i <> pos_pair (S n, x).

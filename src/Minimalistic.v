@@ -237,10 +237,10 @@ Section Language.
         rewrite PositiveSetProperties.empty_union_1 by assumption.
         reflexivity. }
       { intros until 1. intro new_elt; intros.
-        rewrite add_generate_randomness with (s'0:=s') by eassumption.
-        rewrite add_generate_randomness with
-            (s0:=PositiveSet.union s (PositiveSet.remove new_elt idxs2))
-            (s'0:=PositiveSet.union s' idxs2) (x:=new_elt); cycle 1.
+        rewrite @add_generate_randomness with (s':=s') by eassumption.
+        rewrite @add_generate_randomness with
+            (s:=PositiveSet.union s (PositiveSet.remove new_elt idxs2))
+            (s':=PositiveSet.union s' idxs2) (x:=new_elt); cycle 1.
         {
           cbv [PositiveSetProperties.Add]; intros.
           rewrite (union_remove s' idxs2 new_elt).

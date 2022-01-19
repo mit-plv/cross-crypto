@@ -11,8 +11,6 @@ jobs:
       matrix:
         env:
         - { COQ_VERSION: "master", COQ_PACKAGE: "coq"       , PPA: "ppa:jgross-h/coq-master-daily"            , os: "ubuntu-latest"            }
-        - { COQ_VERSION: "v8.13" , COQ_PACKAGE: "coq"       , PPA: "ppa:jgross-h/coq-8.13-daily"              , os: "ubuntu-latest" }
-        - { COQ_VERSION: "v8.12" , COQ_PACKAGE: "coq"       , PPA: "ppa:jgross-h/coq-8.12-daily"              , os: "ubuntu-latest" }
 
     env: ${{ matrix.env }}
     runs-on: ${{ matrix.env.os }}

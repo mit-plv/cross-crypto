@@ -11,6 +11,12 @@ Require Import Coq.Wellfounded.Transitive_Closure.
 Require Import Coq.Wellfounded.Lexicographic_Product.
 Require Import Coq.btauto.Btauto.
 
+#[global] Instance compeq_rw A : RewriteRelation (@Comp_eq A) := {}.
+
+#[global] Hint Mode Reflexive ! ! : typeclass_instances.
+#[global] Hint Mode Symmetric ! ! : typeclass_instances.
+#[global] Hint Mode Transitive ! ! : typeclass_instances.
+
 Lemma eqb_bool a b : (a ?= b) = negb (xorb a b).
 Proof.
   destruct a; destruct b;
@@ -546,9 +552,6 @@ Section Language.
   Ltac merge_always := repeat merge_always_step.
 
   Ltac unpack_always := merge_always; goal_unpack_always.
-
-
-  Local Existing Instance eq_subrelation | 5.
 
   Section WHPLemmas.
     Lemma pr_false : Pr[ret false] = 0.

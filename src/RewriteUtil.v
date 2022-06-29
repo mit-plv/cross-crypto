@@ -192,15 +192,21 @@ Ltac is_evar_or_eq e :=
 Ltac is_evar_or_eq_or_evar_free e :=
   first [ is_evar_or_eq e
         | try (has_evar e; fail 1) ].
+#[global]
 Hint Extern 1 (Proper ?e _) =>
 is_evar_or_eq e; solve_Proper_eqs : typeclass_instances.
+#[global]
 Hint Extern 1 (Proper (?e1 ==> ?e2) _) =>
 is_evar_or_eq e1; is_evar_or_eq_or_evar_free e2; solve_Proper_eqs : typeclass_instances.
+#[global]
 Hint Extern 1 (Proper (?e1 ==> ?e2 ==> ?e3) _) =>
 is_evar_or_eq e1; is_evar_or_eq e2; is_evar_or_eq_or_evar_free e3; solve_Proper_eqs : typeclass_instances.
+#[global]
 Hint Extern 1 (Proper (?e1 ==> ?e2 ==> ?e3 ==> ?e4) _) =>
 is_evar_or_eq e1; is_evar_or_eq e2; is_evar_or_eq e3; is_evar_or_eq_or_evar_free e4; solve_Proper_eqs : typeclass_instances.
+#[global]
 Hint Extern 1 (Proper (?e1 ==> ?e2 ==> ?e3 ==> ?e4 ==> ?e5) _) =>
 is_evar_or_eq e1; is_evar_or_eq e2; is_evar_or_eq e3; is_evar_or_eq e4; is_evar_or_eq_or_evar_free e5; solve_Proper_eqs : typeclass_instances.
+#[global]
 Hint Extern 1 (Proper (?e1 ==> ?e2 ==> ?e3 ==> ?e4 ==> ?e5 ==> ?e6) _) =>
 is_evar_or_eq e1; is_evar_or_eq e2; is_evar_or_eq e3; is_evar_or_eq e4; is_evar_or_eq e5; is_evar_or_eq_or_evar_free e6; solve_Proper_eqs : typeclass_instances.

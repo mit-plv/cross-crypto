@@ -2606,6 +2606,7 @@ Module LanguageImpl.
     end.
   Lemma basetype_eqb_eq t1 t2 : basetype_eqb t1 t2 = true <-> t1 = t2.
   Proof. destruct t1, t2; cbn [basetype_eqb]; intuition congruence. Qed.
+#[global]
   Instance basetype_eqdec : EqDec basetype :=
     Build_EqDec basetype_eqb basetype_eqb_eq.
 
@@ -2623,6 +2624,7 @@ Module LanguageImpl.
   Lemma interp_basetype_eqb_eq {b} (x y : interp_basetype b) :
     interp_basetype_eqb x y = true <-> x = y.
   Proof. destruct b; cbn [interp_basetype_eqb]; crush_deciders idtac. Qed.
+#[global]
   Instance interp_basetype_eqdec {b} : EqDec (interp_basetype b) :=
     Build_EqDec interp_basetype_eqb interp_basetype_eqb_eq.
 
@@ -2669,8 +2671,10 @@ Module LanguageImpl.
     MM t1 -> (interp_type t1 -> MM t2) -> MM t2 :=
     @Bind _ _.
   Definition MMequiv {t} : MM t -> MM t -> Prop := Comp_eq.
+#[global]
   Instance MMequiv_equiv {t} : Equivalence (@MMequiv t).
   Proof. typeclasses eauto. Qed.
+#[global]
   Instance Proper_Mbind {t1 t2} :
     Proper
       (MMequiv ==> (pointwise_relation _ MMequiv) ==> MMequiv)
@@ -2713,6 +2717,7 @@ Module LanguageImpl.
     end.
   Lemma const_eqb_eq (c1 c2 : const) : const_eqb c1 c2 = true <-> c1 = c2.
   Proof. destruct c1, c2; intuition eauto. Qed.
+#[global]
   Instance const_eqdec : EqDec const := Build_EqDec const_eqb const_eqb_eq.
 
   Definition cdom c : type :=
@@ -2747,6 +2752,7 @@ Module LanguageImpl.
     destruct c1, c2; cbv [retconst_eqb]; rewrite ?type_eqb_eq;
       intuition congruence.
   Qed.
+#[global]
   Instance retconst_eqdec : EqDec retconst :=
     Build_EqDec retconst_eqb retconst_eqb_eq.
 

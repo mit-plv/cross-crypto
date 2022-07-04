@@ -1,6 +1,7 @@
 Require Import Coq.Lists.List.
 
 Create HintDb listrew discriminated.
+#[global]
 Hint Rewrite
      PeanoNat.Nat.add_succ_r
      PeanoNat.Nat.add_0_r
@@ -11,6 +12,7 @@ Hint Rewrite
      rev_involutive
      rev_length
   : listrew.
+#[global]
 Hint Rewrite <-
      app_assoc
      app_comm_cons

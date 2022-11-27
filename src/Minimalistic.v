@@ -595,7 +595,7 @@ Section Language.
 
     Lemma pr_weaken :
       forall T (X : Comp T) Y1 Y2,
-        (forall x, In x (getSupport X) -> Bool.leb (Y1 x) (Y2 x)) ->
+        (forall x, In x (getSupport X) -> Bool.le (Y1 x) (Y2 x)) ->
         Pr[x <-$ X; ret Y1 x] <= Pr[x <-$ X; ret Y2 x].
     Proof.
       intros.
@@ -1261,9 +1261,9 @@ Section Language.
       reflexivity.
     Qed.
 
-    Lemma leb_negb : forall b1 b2,
-        Bool.leb b1 b2 ->
-        Bool.leb (negb b2) (negb b1).
+    Lemma le_negb : forall b1 b2,
+        Bool.le b1 b2 ->
+        Bool.le (negb b2) (negb b1).
     Proof.
       destruct b1; destruct b2; intuition.
     Qed.
@@ -1335,8 +1335,8 @@ Section Language.
       eapply pr_weaken.
       intros x _.
       specialize (Himpl' eta (adv eta (fst x)) (snd x)).
-      eapply leb_negb.
-      eapply leb_implb.
+      eapply le_negb.
+      eapply le_implb.
       eauto.
     Qed.
 

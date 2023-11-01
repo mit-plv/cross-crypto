@@ -51,16 +51,16 @@ Ltac propositional := intuition idtac.
 Ltac linear_arithmetic := intros;
     repeat match goal with
            | [ |- context[max ?a ?b] ] =>
-             let Heq := fresh "Heq" in destruct (Max.max_spec a b) as [[? Heq] | [? Heq]];
+             let Heq := fresh "Heq" in destruct (Nat.max_spec a b) as [[? Heq] | [? Heq]];
                rewrite Heq in *; clear Heq
            | [ _ : context[max ?a ?b] |- _ ] =>
-             let Heq := fresh "Heq" in destruct (Max.max_spec a b) as [[? Heq] | [? Heq]];
+             let Heq := fresh "Heq" in destruct (Nat.max_spec a b) as [[? Heq] | [? Heq]];
                rewrite Heq in *; clear Heq
            | [ |- context[min ?a ?b] ] =>
-             let Heq := fresh "Heq" in destruct (Min.min_spec a b) as [[? Heq] | [? Heq]];
+             let Heq := fresh "Heq" in destruct (Nat.min_spec a b) as [[? Heq] | [? Heq]];
                rewrite Heq in *; clear Heq
            | [ _ : context[min ?a ?b] |- _ ] =>
-             let Heq := fresh "Heq" in destruct (Min.min_spec a b) as [[? Heq] | [? Heq]];
+             let Heq := fresh "Heq" in destruct (Nat.min_spec a b) as [[? Heq] | [? Heq]];
                rewrite Heq in *; clear Heq
            end; lia.
 

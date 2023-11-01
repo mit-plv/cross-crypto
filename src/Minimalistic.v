@@ -2314,7 +2314,7 @@ Section Language.
 
   Lemma old_different i n x : index_old n i -> i <> pos_pair (S n, x).
   Proof.
-    intros ??; subst; eauto using pos_pair_old_conv, gt_Sn_n.
+    intros ??; subst; eauto using pos_pair_old_conv, Nat.lt_succ_diag_r.
   Qed.
 
   Lemma pos_pair_inj_left n m x y : pos_pair (n, x) = pos_pair (m, y) ->

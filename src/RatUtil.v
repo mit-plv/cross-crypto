@@ -5,11 +5,11 @@ Create HintDb rat discriminated.
 Create HintDb ratsimpl discriminated.
 
 #[global]
-Hint Immediate (@reflexivity Rat eqRat _) : rat.
+Hint Extern 1 => simple eapply (@reflexivity Rat eqRat _) : rat.
 #[global]
-Hint Immediate (@reflexivity Rat leRat _) : rat.
+Hint Extern 1 => simple eapply (@reflexivity Rat leRat _) : rat.
 #[global]
-Hint Immediate (rat0_le_all) : rat.
+Hint Immediate rat0_le_all : rat.
 
 Lemma maxRat_same r : maxRat r r = r.
 Proof. intros; cbv [maxRat]; destruct (bleRat r r) eqn:?; trivial. Qed.

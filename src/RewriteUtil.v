@@ -1,7 +1,7 @@
 Require Import FCF.FCF.
 Require Import FCF.Asymptotic.
 Require Import RatUtil.
-Require Import Coq.Lists.SetoidList.
+From Coq Require Import SetoidList.
 
 Global Instance Proper_negligible :
   Proper (pointwise_relation nat eqRat ==> iff) negligible.

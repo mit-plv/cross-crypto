@@ -1,5 +1,5 @@
 Require Import FCF.FCF.
-Require Import Coq.Classes.Morphisms.
+From Coq Require Import Morphisms.
 
 Create HintDb rat discriminated.
 Create HintDb ratsimpl discriminated.

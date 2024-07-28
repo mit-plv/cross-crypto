@@ -1,12 +1,12 @@
-Require Import Coq.Arith.PeanoNat.
-Require Import Coq.Bool.Bool.
-Require Import Coq.Classes.Morphisms.
-Require Import Coq.Logic.Eqdep_dec.
-Require Import Coq.Strings.String.
-Require Import Coq.derive.Derive.
+From Coq Require Import PeanoNat.
+From Coq Require Import Bool.
+From Coq Require Import Morphisms.
+From Coq Require Import Eqdep_dec.
+From Coq Require Import String.
+From Coq Require Import Derive.
 Require Import ZArith Lia.
 
-Require Import Coq.Lists.List.
+From Coq Require Import List.
 
 Require CrossCrypto.fmap.
 Require Import CrossCrypto.ListUtil.

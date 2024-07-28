@@ -1,4 +1,4 @@
-Require Import Coq.Lists.List.
+From Coq Require Import List.
 
 Create HintDb listrew discriminated.
 #[global]

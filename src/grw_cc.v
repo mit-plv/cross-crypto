@@ -2,10 +2,10 @@ Set Universe Polymorphism.
 Set Primitive Projections.
 Unset Printing Primitive Projection Parameters.
 
-Require Import Coq.Arith.PeanoNat.
-Require Import Coq.Strings.String.
-Require Import Coq.Lists.List.
-Require Import Coq.Bool.Bool.
+From Coq Require Import PeanoNat.
+From Coq Require Import String.
+From Coq Require Import List.
+From Coq Require Import Bool.
 Require Import ZArith Lia.
 
 Require Import FCF.EqDec.

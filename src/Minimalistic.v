@@ -1,15 +1,15 @@
-Require Import Coq.Logic.Eqdep_dec.
-Require Import Coq.Classes.Morphisms.
-Require Import Coq.MSets.MSetPositive Coq.FSets.FMapPositive.
+From Coq Require Import Eqdep_dec.
+From Coq Require Import Morphisms.
+From Coq Require Import MSetPositive FMapPositive.
 Require Import FCF.FCF FCF.Asymptotic FCF.EqDec.
 Require Import CrossCrypto.Util CrossCrypto.RatUtil CrossCrypto.RewriteUtil CrossCrypto.MapUtil.
-Require Import Coq.ZArith.ZArith.
+From Coq Require Import ZArith.
 Require Import Lia. (* TODO: remove after removing not_negligible_const *)
-Require Import Coq.Init.Wf.
-Require Import Coq.Relations.Relations.
-Require Import Coq.Wellfounded.Transitive_Closure.
-Require Import Coq.Wellfounded.Lexicographic_Product.
-Require Import Coq.btauto.Btauto.
+From Coq.Program Require Import Wf.
+From Coq Require Import Relations.
+From Coq Require Import Transitive_Closure.
+From Coq Require Import Lexicographic_Product.
+From Coq Require Import Btauto.
 
 #[global] Instance compeq_rw A : RewriteRelation (@Comp_eq A) := {}.
 

@@ -1,5 +1,5 @@
-Require Import Coq.MSets.MSetPositive Coq.FSets.FSetFacts Coq.MSets.MSetProperties.
-Require Import Coq.FSets.FMapPositive Coq.FSets.FMapFacts.
+From Coq Require Import MSetPositive FSetFacts MSetProperties.
+From Coq Require Import FMapPositive FMapFacts.
 Module PositiveMapFacts := FMapFacts.WFacts_fun PositiveMap.E PositiveMap.
 Module PositiveMapProperties := FMapFacts.WProperties_fun PositiveMap.E PositiveMap.
 Module PositiveSetProperties := MSetProperties.WPropertiesOn PositiveSet.E MSetPositive.PositiveSet.

@@ -1,6 +1,6 @@
 Local Set Universe Polymorphism.
 Require CrossCrypto.fmap.
-Require Import Coq.Lists.List.
+From Coq Require Import List.
 
 Section WithKV.
   Context {K V : Type}.

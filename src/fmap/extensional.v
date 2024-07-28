@@ -1,7 +1,7 @@
 Require CrossCrypto.fmap.
-Require Import Coq.Lists.List.
-Require Import Coq.Sorting.Sorted.
-Require Import Coq.Logic.Eqdep_dec.
+From Coq Require Import List.
+From Coq Require Import Sorted.
+From Coq Require Import Eqdep_dec.
 
 Definition dec P := {P} + {~P}.
 Definition uniq_pf P := forall p1 p2 : P, p1 = p2.

@@ -95,8 +95,8 @@ Section WithAdversary.
 End WithAdversary.
 End raw_adversary_with_early_exit.
 
-Require Coq.Logic.Eqdep_dec.
-Require Coq.Lists.List.
+From Coq Require Eqdep_dec.
+From Coq Require List.
 
 Module List.
   Import Coq.Lists.List.

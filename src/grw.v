@@ -2709,7 +2709,7 @@ Module LanguageImpl.
                  (@Mbind_Mret_r)
                  (@Mbind_comm).
 
-  Inductive const : Type :=
+  Inductive const : Set :=
   | coin.
   Definition const_eqb (c1 c2 : const) : bool :=
     match c1, c2 with

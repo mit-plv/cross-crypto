@@ -920,9 +920,9 @@ Section Language.
       - intros.
         split.
         + intros.
-          eapply PositiveMapProperties.filter_iff; intuition.
+          eapply PositiveMapProperties.filter_iff; intuition auto with *.
         + intros MF.
-          eapply PositiveMapProperties.filter_iff in MF; intuition.
+          eapply PositiveMapProperties.filter_iff in MF; intuition auto with *.
       - pose proof (PositiveMapProperties.F.find_mapsto_iff m x) as F.
         remember (PositiveMap.find x m) as o.
         destruct o as [t|].
@@ -939,7 +939,7 @@ Section Language.
             eauto.
           }
           symmetry.
-          eapply PositiveMapProperties.filter_iff; intuition.
+          eapply PositiveMapProperties.filter_iff; intuition auto with *.
         + remember (PositiveMap.find
                       x
                       (PositiveMapProperties.filter
@@ -1057,7 +1057,7 @@ Section Language.
       intros.
       eapply PositiveMapProperties.F.Equal_mapsto_iff.
       intros.
-      rewrite PositiveMapProperties.filter_iff; intuition.
+      rewrite PositiveMapProperties.filter_iff; intuition auto with *.
     Qed.
 
     Lemma mapsto_in :
@@ -1075,7 +1075,7 @@ Section Language.
         Comp_eq (generate_randomness eta s)
                 (ret (PositiveMap.empty (interp_type trand eta) : PositiveMap.tree _)).
     Proof.
-      intros; eapply PositiveSetProperties.fold_1; intuition.
+      intros; eapply PositiveSetProperties.fold_1; intuition auto with *.
     Qed.
 
     (* TODO Need a canonical map *)
@@ -1091,7 +1091,7 @@ Section Language.
       eapply positive_map_equal_eq.
       eapply PositiveMapProperties.F.Equal_mapsto_iff.
       intros k e.
-      rewrite PositiveMapProperties.filter_iff; intuition.
+      rewrite PositiveMapProperties.filter_iff; intuition auto with *.
       exfalso; eapply PositiveMapProperties.F.empty_mapsto_iff; eauto.
     Qed.
 
@@ -1265,7 +1265,7 @@ Section Language.
         Bool.le b1 b2 ->
         Bool.le (negb b2) (negb b1).
     Proof.
-      destruct b1; destruct b2; intuition.
+      destruct b1; destruct b2; intuition auto with *.
     Qed.
 
     Lemma weak_whp_impl_dist_always a b : always (a -> b) -> (whp a -> whp b)%core.

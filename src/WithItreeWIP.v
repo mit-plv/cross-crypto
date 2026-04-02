@@ -12,7 +12,7 @@ Module interaction.
   | interact {R : Type} (e : E R) (k : R -> interaction)
   | ret (_ : T).
   Arguments interaction : clear implicits.
-  Arguments interaction _%eff _%type.
+  Arguments interaction _%_eff _%_type.
 
   Section bind.
     Context {E : Type -> Type} {T U : Type} (k : T -> interaction E U).
